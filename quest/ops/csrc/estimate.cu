@@ -31,18 +31,23 @@ void estimate_attn_score(torch::Tensor q,
 	size_t num_heads = q.size(1);
 	size_t head_dim = q.size(2);
 	size_t page_size;
+	size_t kv_num_heads;
 
 	QKVLayout kv_layout = static_cast<QKVLayout>(layout);
 	if(kv_layout == QKVLayout::kHND) {
 		page_size = metadata_data.size(3);
+		kv_num_heads = metadata_data.size(2);
 		#ifdef BSK_TORCH_CHECK
-		CHECK_EQ(metadata_data.size(2), num_heads);
+		// CHECK_EQ(metadata_data.size(2), num_heads);
+		CHECK_EQ(num_heads % metadata_data.size(2) , 0);
 		CHECK_EQ(metadata_data.size(4), head_dim);
 		#endif
 	} else {
 		page_size = metadata_data.size(2);
+		kv_num_heads = metadata_data.size(3);
 		#ifdef BSK_TORCH_CHECK
-		CHECK_EQ(metadata_data.size(3), num_heads);
+		// CHECK_EQ(metadata_data.size(3), num_heads);
+		CHECK_EQ(num_heads % metadata_data.size(3) , 0);
 		CHECK_EQ(metadata_data.size(4), head_dim);
 		#endif
 	}
@@ -54,7 +59,7 @@ void estimate_attn_score(torch::Tensor q,
 	bool success = DISPATCH_PYTORCH_DTYPE_TO_CTYPE(q.scalar_type(), c_type, [&] {
 		SWITCH_LAYOUT(kv_layout, KV_LAYOUT, {
 			paged_kv_t<PageStorage::kIndices, KV_LAYOUT, c_type, int32_t> paged_kv(
-				num_heads,
+				kv_num_heads,
 				page_size,
 				head_dim,
 				batch_size,

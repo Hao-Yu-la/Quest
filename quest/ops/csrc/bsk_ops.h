@@ -38,6 +38,15 @@ void topk_filtering(torch::Tensor estimated_value,
 					torch::Tensor buf,
 					unsigned int page_budget);
 
+void topp_filtering(torch::Tensor estimated_value,
+					torch::Tensor estimated_indices,
+					torch::Tensor d_out,
+					torch::Tensor indices_out,
+					torch::Tensor out_k,
+					torch::Tensor buf,
+					unsigned int page_budget,
+					float topp);
+
 void estimate_attn_score(torch::Tensor q,
 						 torch::Tensor o,
 						 torch::Tensor metadata_data,

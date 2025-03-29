@@ -191,7 +191,7 @@ def decode_estimate(
     """
     f = _kernels.estimate_attn_score
     # (iController.metadata_cache.seqlen - 1) is manually excluding the last elements, which is the current page.
-    o = torch.empty((iController.num_heads, iController.metadata_cache.seqlen - 1), dtype=q.dtype, device=q.device)
+    o = torch.empty((q.size(1), iController.metadata_cache.seqlen - 1), dtype=q.dtype, device=q.device)
     f(
         q,
         o,
@@ -236,6 +236,39 @@ def decode_topk(
         page_budet,
     )
 
+def decode_topp(
+    estimated_attn_score: torch.Tensor,
+    iController: InferenceController,
+):
+    """
+    Semantics of `decode_topp`:
+    select top-p pages with highest attention score.
+
+    Notations for shapes:
+    `B`: batch size
+    `N`: number of heads
+    `D`: head dimension
+    `L`: number of layers
+    `MAXLEN`: maximum length of the KV cache
+
+    Args:
+        q: Shape: `[B, N, D]`. Key projection (`X @ W_k`).
+        iController: InferenceController object, which contains all needed information.
+    """
+    # excluding the last page
+    page_budet = iController.inference_page_budget - 1
+    f = _kernels.topp_filtering
+    f(
+        estimated_attn_score,
+        iController.kv_indices_without_last,
+        iController.topk_dout_buffer,
+        iController.topk_dindices_buffer,
+        iController.topp_num,
+        iController.topk_buf,
+        page_budet,
+        iController.topp,
+    )
+
 def decode_sparse_attn(
     q: torch.Tensor,
     iController: InferenceController,
@@ -261,6 +294,12 @@ def decode_sparse_attn(
         layer_idx: Layer index of the KV cache.
         topk_indices: Shape: `[N, page_budget-1]`. Top-k indices.
     """
+    # When using topp, we need to modify the iController.kv_indptr_for_approx_decode according to the iController.topp_num
+    # set the select page number to the max(iController.topp_num), which is the max number of pages we select.
+    if iController.topp is not None:
+        selected_page_num = iController.topp_num.max()
+        iController.kv_indptr_for_approx_decode = torch.tensor([0, selected_page_num], dtype=torch.int32, device=iController.device)
+    
     o = torch.empty_like(q, dtype=q.dtype, device=q.device)
     iController._decode_handler.forward(
         q,

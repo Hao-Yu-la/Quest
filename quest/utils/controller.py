@@ -14,7 +14,9 @@ class InferenceController:
         page_budget, # Real page budget including the last page
         max_seq_len, # Real max for allocating kv / metadata
         dtype,
-        device,      
+        device,
+        quest_skip_layer = 2, # Skip first two layers
+        topp=None # For top-p filtering, select KV pages with the sum of attention score ratio > p
     ):
         max_kv_pages_num = (max_seq_len + page_size - 1) // page_size
         self.kv_cache = KvCache(
@@ -45,6 +47,8 @@ class InferenceController:
 
         self._page_budget = page_budget
         self._decode_handler = BatchDecodeWithPagedKVCacheWrapper(kv_layout="NHD")
+        self.quest_skip_layer = quest_skip_layer
+        self.topp = topp # For top-p filtering, select KV pages with the sum of attention score ratio > p
 
         self.kv_indices_with_last = None
         self.kv_indices_without_last = None
@@ -60,6 +64,7 @@ class InferenceController:
 
         self.topk_dout_buffer = None
         self.topk_dindices_buffer = None
+        self.topp_num = None # For top-p filtering, the number of pages selected
         self.topk_buf = None
     
     # Used for controlling the number of pages
@@ -117,6 +122,7 @@ class InferenceController:
             # Allocate buffer for top-k filtering
             self.topk_dout_buffer = torch.zeros((self.num_heads, self.inference_page_budget - 1), dtype=self.dtype, device=self.device)
             self.topk_dindices_buffer = torch.zeros((self.num_heads, self.inference_page_budget - 1), dtype=torch.int32, device=self.device)
+            self.topp_num = torch.zeros((self.num_heads,), dtype=torch.int32, device=self.device)
             self.topk_buf = torch.zeros((self.num_heads, 8192 * 2 * (2+4) // 2 // 48), dtype=self.dtype, device=self.device)
 
             self._decode_handler.begin_forward(
@@ -134,12 +140,19 @@ class InferenceController:
     def end_forward(self):
         self._decode_handler.end_forward()
     
-    def need_estimate(self) -> bool:
+    def need_estimate(self, layer_idx:int) -> bool:
         if self.inference_page_budget is None:
             return False
         
+        if self.topp is not None and layer_idx >= self.quest_skip_layer:
+            return True
+
         cur_page_nums = len(self.kv_cache.indicies)
         return cur_page_nums > self.inference_page_budget
+    
+    def using_topp(self) -> bool:
+        # if self.topp is not None, we need to do top-p filtering
+        return self.topp is not None
     
     def clean_states(self):
         self.kv_cache.release()

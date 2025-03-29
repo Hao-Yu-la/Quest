@@ -122,7 +122,7 @@ class QuestAttention(nn.Module):
             torch.cuda.nvtx.range_pop()
         else:
             # Skipping layers is controled by PAGE_BUDGET, which is set in LlamaModel.
-            if iController.need_estimate() == False:
+            if iController.need_estimate(self.layer_idx) == False:
                 torch.cuda.nvtx.range_push("full_attn")
                 attn_output = quest.utils.decode_sparse_attn(
                     query_states,
@@ -140,12 +140,20 @@ class QuestAttention(nn.Module):
                 )
                 torch.cuda.nvtx.range_pop()
 
-                torch.cuda.nvtx.range_push("topk")
-                quest.utils.decode_topk(
-                    estimated_attn_score,
-                    iController,
-                )
-                torch.cuda.nvtx.range_pop()
+                if iController.using_topp: # Topp sampling
+                    torch.cuda.nvtx.range_push("topp")
+                    attn_output = quest.utils.decode_topp(
+                        estimated_attn_score,
+                        iController,
+                    )
+                    torch.cuda.nvtx.range_pop()
+                else: # Topk sampling
+                    torch.cuda.nvtx.range_push("topk")
+                    quest.utils.decode_topk(
+                        estimated_attn_score,
+                        iController,
+                    )
+                    torch.cuda.nvtx.range_pop()
 
                 torch.cuda.nvtx.range_push("approx_attn")
                 attn_output = quest.utils.decode_sparse_attn(

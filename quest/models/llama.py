@@ -524,6 +524,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         token_budget: int = 512,
         dtype: torch.dtype = torch.float16,
         device = torch.device("cuda:0"),
+        topp: float = None,
     ):
         """
         Init function for Quest. Must be called before forwarding.
@@ -539,13 +540,15 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         
         self.model.iController = InferenceController(
             num_layers=config.num_hidden_layers,
-            num_heads=config.num_attention_heads,
+            num_heads=config.num_key_value_heads,
             head_dim=config.hidden_size // config.num_attention_heads,
             page_size=page_size,
             page_budget=self.model._quest_page_budget,
             max_seq_len=max_seq_len, # Used for allocating KV Pools
             dtype=dtype,
-            device=device
+            device=device,
+            quest_skip_layer=self.model._quest_skip_layer,
+            topp=topp
         )
         
         print(f"Quest allocates KV-Cache of {max_seq_len} tokens")
