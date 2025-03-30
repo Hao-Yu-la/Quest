@@ -9,6 +9,7 @@ class InferenceController:
         self,
         num_layers,
         num_heads,
+        num_key_value_heads,
         head_dim,
         page_size,
         page_budget, # Real page budget including the last page
@@ -21,7 +22,7 @@ class InferenceController:
         max_kv_pages_num = (max_seq_len + page_size - 1) // page_size
         self.kv_cache = KvCache(
             num_layers=num_layers,
-            num_heads=num_heads,
+            num_heads=num_key_value_heads,
             head_dim=head_dim,
             max_seq_len=max_seq_len,
             page_size=page_size,
@@ -30,7 +31,7 @@ class InferenceController:
         )
         self.metadata_cache = KvCache(
             num_layers=num_layers,
-            num_heads=num_heads,
+            num_heads=num_key_value_heads,
             head_dim=head_dim,
             max_seq_len=max_kv_pages_num,
             page_size=page_size,
@@ -42,6 +43,7 @@ class InferenceController:
         self.dtype = dtype
 
         self.num_heads = num_heads
+        self.num_key_value_heads = num_key_value_heads
         self.head_dim = head_dim
         self.page_size = page_size
 
@@ -128,7 +130,7 @@ class InferenceController:
             self._decode_handler.begin_forward(
                 self.kv_indptr_for_approx_decode,
                 self.num_heads,
-                self.num_heads,
+                self.num_key_value_heads,
                 self.head_dim,
                 self.page_size,
                 self.dtype
@@ -152,7 +154,9 @@ class InferenceController:
     
     def using_topp(self) -> bool:
         # if self.topp is not None, we need to do top-p filtering
-        return self.topp is not None
+        if self.topp is not None and self.topp > 0 and self.topp < 1:
+            return True
+        return False
     
     def clean_states(self):
         self.kv_cache.release()

@@ -16,6 +16,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutpu
 from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
 from quest.models.QuestAttention import QuestAttention
 from quest.utils.controller import InferenceController
@@ -118,6 +119,7 @@ class LlamaDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         iController: Optional[InferenceController] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -131,6 +133,9 @@ class LlamaDecoderLayer(nn.Module):
                 If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+            position_embeddings (`Tuple[torch.FloatTensor, torch.FloatTensor]`, *optional*):
+                Tuple containing the cosine and sine positional embeddings of shape `(batch_size, seq_len, head_dim)`,
+                with `head_dim` being the embedding dimension of each attention head.
         """
 
         residual = hidden_states
@@ -149,6 +154,7 @@ class LlamaDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
             iController=iController,
+            position_embeddings=position_embeddings,
         )
         torch.cuda.nvtx.range_pop()
         hidden_states = residual + hidden_states
@@ -304,6 +310,7 @@ class LlamaModel(LlamaPreTrainedModel):
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, i) for i in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.rotary_emb = LlamaRotaryEmbedding(config=config)
 
         self.gradient_checkpointing = False
         
@@ -407,6 +414,11 @@ class LlamaModel(LlamaPreTrainedModel):
 
         hidden_states = inputs_embeds
 
+        # create position embeddings to be shared across the decoder layers
+        torch.cuda.nvtx.range_push("RoPE")
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        torch.cuda.nvtx.range_pop()
+
         if self.gradient_checkpointing and self.training:
             if use_cache:
                 logger.warning_once(
@@ -471,6 +483,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     output_attentions=output_attentions,
                     use_cache=use_cache,
                     iController=self.iController,
+                    position_embeddings=position_embeddings,
                 )
                 torch.cuda.nvtx.range_pop()
 
@@ -540,7 +553,8 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         
         self.model.iController = InferenceController(
             num_layers=config.num_hidden_layers,
-            num_heads=config.num_key_value_heads,
+            num_heads=config.num_attention_heads,
+            num_key_value_heads=config.num_key_value_heads,
             head_dim=config.hidden_size // config.num_attention_heads,
             page_size=page_size,
             page_budget=self.model._quest_page_budget,

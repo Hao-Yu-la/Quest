@@ -258,16 +258,29 @@ def decode_topp(
     # excluding the last page
     page_budet = iController.inference_page_budget - 1
     f = _kernels.topp_filtering
-    f(
-        estimated_attn_score,
-        iController.kv_indices_without_last,
-        iController.topk_dout_buffer,
-        iController.topk_dindices_buffer,
-        iController.topp_num,
-        iController.topk_buf,
-        page_budet,
-        iController.topp,
-    )
+    try:
+        f(
+            estimated_attn_score,
+            iController.kv_indices_without_last,
+            iController.topk_dout_buffer,
+            iController.topk_dindices_buffer,
+            iController.topp_num,
+            iController.topk_buf,
+            page_budet,
+            iController.topp,
+        )
+    except TypeError as e:
+        print(f"Error details: {e}")
+        print(f"Arguments:")
+        print(f"  estimated_attn_score: {estimated_attn_score.shape}, {estimated_attn_score.dtype}")
+        print(f"  kv_indices_without_last: {iController.kv_indices_without_last.shape}, {iController.kv_indices_without_last.dtype}")
+        print(f"  topk_dout_buffer: {iController.topk_dout_buffer.shape}, {iController.topk_dout_buffer.dtype}")
+        print(f"  topk_dindices_buffer: {iController.topk_dindices_buffer.shape}, {iController.topk_dindices_buffer.dtype}")
+        print(f"  topp_num: {iController.topp_num.shape}, {iController.topp_num.dtype}")
+        print(f"  topk_buf: {iController.topk_buf.shape}, {iController.topk_buf.dtype}")
+        print(f"  page_budget: {page_budet}")
+        print(f"  topp: {iController.topp}")
+        raise
 
 def decode_sparse_attn(
     q: torch.Tensor,

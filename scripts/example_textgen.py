@@ -2,7 +2,7 @@ from transformers import AutoTokenizer
 import torch
 import argparse
 
-MODEL_PATH = "/home/zhanghaoyu/models/Llama-3.1-8B-Instruc"
+MODEL_PATH = "/home/zhanghaoyu/models/Llama-3.1-8B-Instruct/"
 DEVICE = torch.device("cuda:0")
 DTYPE = torch.float16
 torch.set_default_dtype(DTYPE)
@@ -23,7 +23,7 @@ if args.method == "quest":
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)
 
     # Init Quest Controller
-    model.quest_init(page_size=16, max_seq_len=8192, token_budget=args.token_budget)
+    model.quest_init(page_size=16, max_seq_len=8192, token_budget=args.token_budget, topp=0.8)
 else:
     from transformers import LlamaForCausalLM
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)

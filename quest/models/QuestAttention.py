@@ -10,6 +10,9 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding, apply_rotary_pos_emb, repeat_kv
 
 import quest.utils
+import logging
+
+logger = logging.getLogger(__name__)
 
 class QuestAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -35,20 +38,20 @@ class QuestAttention(nn.Module):
         self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-        self._init_rope()
+        self.rotary_emb = LlamaRotaryEmbedding(config=self.config)
 
-    def _init_rope(self):
-        # rope_theta is default to 1e4, as set in RoPE kernel API.
-        if self.config.rope_scaling is None:
-            self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
-            self.rope_scale = 1.0
-        else:
-            scaling_type = self.config.rope_scaling["type"]
-            if scaling_type == "linear":
-                # support for Longchat-v1.5.
-                self.rope_scale = self.config.rope_scaling["factor"]
-            else:
-                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
+    # def _init_rope(self):
+    #     # rope_theta is default to 1e4, as set in RoPE kernel API.
+    #     if self.config.rope_scaling is None:
+    #         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
+    #         self.rope_scale = 1.0
+    #     else:
+    #         scaling_type = self.config.rope_scaling["type"]
+    #         if scaling_type == "linear":
+    #             # support for Longchat-v1.5.
+    #             self.rope_scale = self.config.rope_scaling["factor"]
+    #         else:
+    #             raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -62,6 +65,7 @@ class QuestAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         iController: Optional[quest.utils.InferenceController] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
@@ -96,7 +100,22 @@ class QuestAttention(nn.Module):
         value_states = value_states.view(q_len, self.num_key_value_heads, self.head_dim)
 
         torch.cuda.nvtx.range_push("RoPE")
-        quest.utils.apply_rope_in_place(query_states, key_states, iController.kv_cache.seqlen - q_len, rope_scale=self.rope_scale)
+        # quest.utils.apply_rope_in_place(query_states, key_states, iController.kv_cache.seqlen - q_len, rope_scale=self.rope_scale)
+        if position_embeddings is None:
+            logger.warning_once(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.46 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
+            )
+            cos, sin = self.rotary_emb(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states = query_states.transpose(1, 2).contiguous().view(q_len, self.num_heads, self.head_dim)
+        key_states = key_states.transpose(1, 2).contiguous().view(q_len, self.num_key_value_heads, self.head_dim)
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("append_kv")
@@ -140,7 +159,7 @@ class QuestAttention(nn.Module):
                 )
                 torch.cuda.nvtx.range_pop()
 
-                if iController.using_topp: # Topp sampling
+                if iController.using_topp(): # Topp sampling
                     torch.cuda.nvtx.range_push("topp")
                     attn_output = quest.utils.decode_topp(
                         estimated_attn_score,
