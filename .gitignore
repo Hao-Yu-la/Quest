@@ -175,7 +175,7 @@ results/
 datasets/
 outputs/
 
-*.ipynb
+# *.ipynb
 
 evaluation/LongBench/pred
 evaluation/LongBench/pred_e
