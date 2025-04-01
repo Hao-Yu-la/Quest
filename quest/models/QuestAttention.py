@@ -1,3 +1,4 @@
+import json
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -174,6 +175,12 @@ class QuestAttention(nn.Module):
                     )
                     torch.cuda.nvtx.range_pop()
 
+                # with open("/home/zhanghaoyu/project/quest/tmp/topp_num_" + str(iController.topp) + ".json", "a") as f:
+                #     record = {
+                #     "topp_num": iController.topp_num.tolist(), 
+                #     "layer_idx": self.layer_idx
+                #     }
+                #     f.write(json.dumps(record) + "\n")
                 torch.cuda.nvtx.range_push("approx_attn")
                 attn_output = quest.utils.decode_sparse_attn(
                     query_states,

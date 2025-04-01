@@ -16,6 +16,7 @@ RUNTIME_CFGS = [
 parser = argparse.ArgumentParser()
 parser.add_argument("--method", choices=RUNTIME_CFGS, default="quest")
 parser.add_argument("--token_budget", type=int, default=1024)
+parser.add_argument("--topp", type=float, default=0.8)
 args = parser.parse_args()
 
 if args.method == "quest":
@@ -23,7 +24,7 @@ if args.method == "quest":
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)
 
     # Init Quest Controller
-    model.quest_init(page_size=16, max_seq_len=8192, token_budget=args.token_budget, topp=0.8)
+    model.quest_init(page_size=16, max_seq_len=8192, token_budget=args.token_budget, topp=args.topp)
 else:
     from transformers import LlamaForCausalLM
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)
@@ -32,7 +33,6 @@ else:
 prompt = "In an animal kingdom, the lion is the king. One day, the lion announces a competition to choose the most hardworking animal. The turtle, rabbit, monkey, zebra, and giraffe all decide to participate. After a day of observation, the lion notices that all the animals are working hard, except for the rabbit, who is sleeping. So why does the lion choose the rabbit as the most hardworking animal?"
 inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
 print(f"Input Sequence Length: {inputs.input_ids.shape[1]}")
-
 generate_ids = model.generate(
                             inputs.input_ids,
                             max_length=2048,

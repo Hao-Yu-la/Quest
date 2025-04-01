@@ -110,6 +110,7 @@ __global__ __forceinline__ void compute_top_p_kernel(const T* in,
       IdxT k = max_k; // Default to max_k
       for (IdxT i = 0; i < max_k; ++i) {
          cumsum += s_values[i];
+         printf("i=%d, cumsum=%f, threshold=%f\n", i, (float)cumsum, (float)threshold);
          if (cumsum >= threshold) {
             k = i + 1;
             break;

@@ -7,6 +7,7 @@ from quest.utils.utils import TensorLayout
 from quest.utils.kv_cache import KvCache
 from quest.utils.controller import InferenceController
 from quest.utils.decode_wrapper import BatchDecodeWithPagedKVCacheWrapper
+import json
 
 __all__ = [
     'TensorLayout',
