@@ -184,3 +184,4 @@ evaluation/pg19/results
 
 *.egg-info/
 tmp/
+scripts/attention_analyse/*.png

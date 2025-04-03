@@ -608,6 +608,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        num_logits_to_keep: int = 0,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -661,7 +662,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.pretraining_tp)]
             logits = torch.cat(logits, dim=-1)
         else:
-            logits = self.lm_head(hidden_states)
+            logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
         logits = logits.float()
 
         torch.cuda.nvtx.range_pop()
@@ -693,7 +694,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         )
 
     def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
+        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, num_logits_to_keep=None, **kwargs
     ):
         if past_key_values:
             input_ids = input_ids[:, -1:]
@@ -712,6 +713,9 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         else:
             model_inputs = {"input_ids": input_ids}
 
+        if num_logits_to_keep is not None:
+            model_inputs["num_logits_to_keep"] = num_logits_to_keep
+            
         model_inputs.update(
             {
                 "position_ids": position_ids,

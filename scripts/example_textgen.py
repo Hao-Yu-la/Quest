@@ -3,7 +3,7 @@ import torch
 import argparse
 
 MODEL_PATH = "/home/zhanghaoyu/models/Llama-3.1-8B-Instruct/"
-DEVICE = torch.device("cuda:0")
+DEVICE = torch.device("cuda:1")
 DTYPE = torch.float16
 torch.set_default_dtype(DTYPE)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
@@ -36,6 +36,7 @@ print(f"Input Sequence Length: {inputs.input_ids.shape[1]}")
 generate_ids = model.generate(
                             inputs.input_ids,
                             max_length=2048,
-                            use_cache=True # Managed by our InferenceController
+                            use_cache=True, # Managed by our InferenceController
+                            num_logits_to_keep=1,
                             )
 print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0])
