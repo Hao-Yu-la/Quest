@@ -13,13 +13,20 @@ class InferenceController:
         head_dim,
         page_size,
         page_budget, # Real page budget including the last page
-        max_seq_len, # Real max for allocating kv / metadata
+        max_seq_len: int | list[int], # Real max for allocating kv / metadata of each layer
         dtype,
         device,
         quest_skip_layer = 2, # Skip first two layers
         topp=None # For top-p filtering, select KV pages with the sum of attention score ratio > p
     ):
-        max_kv_pages_num = (max_seq_len + page_size - 1) // page_size
+        if isinstance(max_seq_len, int):
+            max_seq_len = [max_seq_len] * num_layers
+        assert len(max_seq_len) == num_layers, "max_seq_len should be a list with length equal to num_layers"
+        assert all(m > 0 for m in max_seq_len), "max_seq_len should be a list with positive integers"
+        assert page_size > 0, "page_size should be a positive integer"
+        assert page_budget > 0, "page_budget should be a positive integer"
+        
+        max_kv_pages_num = [(max_seq_len_i + page_size - 1) // page_size for max_seq_len_i in max_seq_len]
         self.kv_cache = KvCache(
             num_layers=num_layers,
             num_heads=num_key_value_heads,
@@ -46,6 +53,7 @@ class InferenceController:
         self.num_key_value_heads = num_key_value_heads
         self.head_dim = head_dim
         self.page_size = page_size
+        self.num_layers = num_layers
 
         self._page_budget = page_budget
         self._decode_handler = BatchDecodeWithPagedKVCacheWrapper(kv_layout="NHD")
@@ -80,7 +88,11 @@ class InferenceController:
         # Allocate entry for tokens
         appended_new_pages = self.kv_cache.append_seq(seq_len)
         # Allocate entry for metadata
-        _ = self.metadata_cache.append_seq(appended_new_pages)
+        # Check if all values in appended_new_pages are the same
+        if len(appended_new_pages) > 0:
+            first_value = appended_new_pages[0]
+            assert all(x == first_value for x in appended_new_pages), "All values in appended_new_pages should be the same"
+        _ = self.metadata_cache.append_seq(appended_new_pages[0])
     
     # Prepare metadata used for inference under certain PAGE_BUDGET
     # Called multiple times for layer sensitivity
@@ -88,32 +100,41 @@ class InferenceController:
         # Allocate tensor in advance
         # This is used for append kernels, which need original indices
         if updateTensor:
-            self.kv_indptr_for_append = torch.tensor([0, len(self.kv_cache.indicies)], dtype=torch.int32, device=self.device)
-            self.metadata_indptr_for_append = torch.tensor([0, len(self.metadata_cache.indicies)], dtype=torch.int32, device=self.device)
-            self.kv_last_page_idx = self.kv_cache.indicies[-1]
-            self.metadata_last_page_idx = self.metadata_cache.indicies[-1]
+            self.kv_indptr_for_append = torch.tensor([[0, len(self.kv_cache.indicies(layer_idx))] for layer_idx in range(self.num_layers)], dtype=torch.int32, device=self.device)
+            self.metadata_indptr_for_append = torch.tensor([[0, len(self.metadata_cache.indicies(layer_idx))] for layer_idx in range(self.num_layers)], dtype=torch.int32, device=self.device)
+            self.kv_last_page_idx = [self.kv_cache.indicies(layer_idx)[-1] for layer_idx in range(self.num_layers)] # The last page index is always the newly generated page
+            self.metadata_last_page_idx = [self.metadata_cache.indicies(layer_idx)[-1] for layer_idx in range(self.num_layers)]
 
         if seq_len > 1:
             # prefill requests
             # append_kv_cache_prefill and prefill_with_paged_kv_cache
             if updateTensor:
-                self.kv_indices_with_last = torch.tensor(self.kv_cache.indicies, dtype=torch.int32, device=self.device)
-                self.metadata_indices = torch.tensor(self.metadata_cache.indicies, dtype=torch.int32, device=self.device)
+                max_length = max([len(self.kv_cache.indicies(layer_idx)) for layer_idx in range(self.num_layers)])
+                padded_kv_cache_indicies = [sublist + [0] * (max_length - len(sublist)) for sublist in self.kv_cache.indicies()]
+                self.kv_indices_with_last = torch.tensor(padded_kv_cache_indicies, dtype=torch.int32, device=self.device)
+                max_length = max([len(self.metadata_cache.indicies(layer_idx)) for layer_idx in range(self.num_layers)])
+                padded_metadata_cache_indicies = [sublist + [0] * (max_length - len(sublist)) for sublist in self.metadata_cache.indicies()]
+                self.metadata_indices = torch.tensor(padded_metadata_cache_indicies, dtype=torch.int32, device=self.device)
         else:
             # decode requests
             # append_kv_cache_decode, estimate_attn_score, topk_filtering
-            cur_page_nums = len(self.kv_cache.indicies)
+            cur_page_nums = min([len(self.kv_cache.indicies(layer_idx)) for layer_idx in range(self.num_layers)]) # 当前 GPU 上 KV Cache 的 page 数量
             assert cur_page_nums > 1 # at least two pages for excluding last page
 
             if updateTensor:
                 # used for appending
-                self.kv_indices_with_last = torch.tensor(self.kv_cache.indicies, dtype=torch.int32, device=self.device)
+                max_length = max([len(self.kv_cache.indicies(layer_idx)) for layer_idx in range(self.num_layers)])
+                padded_kv_cache_indicies = [sublist + [0] * (max_length - len(sublist)) for sublist in self.kv_cache.indicies()]
+                self.kv_indices_with_last = torch.tensor(padded_kv_cache_indicies, dtype=torch.int32, device=self.device)
 
                 # Only used for top-k filtering (because we manully exclude the last page) as input index
-                self.kv_indices_without_last = torch.tensor(self.kv_cache.indicies[:-1], dtype=torch.int32, device=self.device).repeat(self.num_heads, 1)
+                self.kv_indices_without_last = torch.tensor(range((self.kv_cache.seqlen + self.page_size - 1) // self.page_size)[:-1], dtype=torch.int32, device=self.device).repeat(self.num_heads, 1) # kv_indices_without_last = range(0, full_page_nums - 1) * num_heads
+                # 当一些层的 KV Cache 卸载时，page_num 会小于 full_page_nums，但其 metadata 依然保存在 GPU 上，进行 top-k filtering 时依然当做 full_page_nums 来处理
 
                 # used for estimate
-                self.metadata_indices = torch.tensor(self.metadata_cache.indicies, dtype=torch.int32, device=self.device)
+                max_length = max([len(self.metadata_cache.indicies(layer_idx)) for layer_idx in range(self.num_layers)])
+                padded_metadata_cache_indicies = [sublist + [0] * (max_length - len(sublist)) for sublist in self.metadata_cache.indicies()]
+                self.metadata_indices = torch.tensor(padded_metadata_cache_indicies, dtype=torch.int32, device=self.device)
 
             # used as page_budget for topk and approx kernel
             self.inference_page_budget = min(self._page_budget, cur_page_nums)
@@ -149,7 +170,7 @@ class InferenceController:
         if self.topp is not None and layer_idx >= self.quest_skip_layer:
             return True
 
-        cur_page_nums = len(self.kv_cache.indicies)
+        cur_page_nums = len(self.kv_cache.indicies(layer_idx))
         return cur_page_nums > self.inference_page_budget
     
     def using_topp(self) -> bool:

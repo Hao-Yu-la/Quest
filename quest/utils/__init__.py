@@ -97,15 +97,15 @@ def append_kv(
             k,
             v,
             iController.kv_cache.buf_layer(layer_idx),
-            iController.kv_indices_with_last,
-            iController.kv_indptr_for_append,
+            iController.kv_indices_with_last[layer_idx],
+            iController.kv_indptr_for_append[layer_idx],
             iController.kv_cache.last_page_len,
-            iController.kv_last_page_idx,
+            iController.kv_last_page_idx[layer_idx],
             iController.metadata_cache.buf_layer(layer_idx),
-            iController.metadata_indices,
-            iController.metadata_indptr_for_append,
+            iController.metadata_indices[layer_idx],
+            iController.metadata_indptr_for_append[layer_idx],
             iController.metadata_cache.last_page_len,
-            iController.metadata_last_page_idx,
+            iController.metadata_last_page_idx[layer_idx],
             iController.layout
         )
     else:
@@ -113,15 +113,15 @@ def append_kv(
             k,
             v,
             iController.kv_cache.buf_layer(layer_idx),
-            iController.kv_indices_with_last,
-            iController.kv_indptr_for_append,
+            iController.kv_indices_with_last[layer_idx],
+            iController.kv_indptr_for_append[layer_idx],
             iController.kv_cache.last_page_len,
-            iController.kv_last_page_idx,
+            iController.kv_last_page_idx[layer_idx],
             iController.metadata_cache.buf_layer(layer_idx),
-            iController.metadata_indices,
-            iController.metadata_indptr_for_append,
+            iController.metadata_indices[layer_idx],
+            iController.metadata_indptr_for_append[layer_idx],
             iController.metadata_cache.last_page_len,
-            iController.metadata_last_page_idx,
+            iController.metadata_last_page_idx[layer_idx],
             iController.layout
         )
 
@@ -159,7 +159,7 @@ def prefill_forward(
     o = f(
         q,
         iController.kv_cache.buf_layer(layer_idx),
-        iController.kv_indices_with_last,
+        iController.kv_indices_with_last[layer_idx],
         iController.kv_cache.last_page_len,
         True, # Casual
         iController.layout,
@@ -197,10 +197,10 @@ def decode_estimate(
         q,
         o,
         iController.metadata_cache.buf_layer(layer_idx),
-        iController.metadata_indices,
-        iController.metadata_indptr_for_append,
+        iController.metadata_indices[layer_idx],
+        iController.metadata_indptr_for_append[layer_idx],
         iController.metadata_cache.last_page_len, # One entry delta is considered by kernel-level implementation
-        iController.metadata_last_page_idx,
+        iController.metadata_last_page_idx[layer_idx],
         iController.layout,
     )
     return o
@@ -322,7 +322,7 @@ def decode_sparse_attn(
         topk_indices,
         iController.kv_indptr_for_approx_decode,
         iController.kv_cache.last_page_len,
-        iController.kv_last_page_idx,
+        iController.kv_last_page_idx[layer_idx],
         rope_scale,
         rope_theta,
     )

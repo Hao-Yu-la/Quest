@@ -3,7 +3,7 @@ import torch
 import argparse
 
 MODEL_PATH = "/home/zhanghaoyu/models/Llama-3.1-8B-Instruct/"
-DEVICE = torch.device("cuda:1")
+DEVICE = torch.device("cuda:0")
 DTYPE = torch.float16
 torch.set_default_dtype(DTYPE)
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
