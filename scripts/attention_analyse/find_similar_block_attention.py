@@ -147,6 +147,7 @@ for prompt_i in range(len(prompt)):
               #     similar_layer_head = (layer_j, min_index)
           with open("results/attention_diff_kvblock.jsons", "a") as f:
             json.dump({"layer_i": layer_i, "head_i": head_i, "diffs": attention_diff_matric_kvblock[layer_i * num_heads + head_i, :].cpu().tolist()}, f)
+            json.dump("\n", f)
           # print(f"Layer {layer_i}, Head {head_i} is most similar to Layer {similar_layer_head[0]}, Head {similar_layer_head[1]} with diff {min_diff}")
           # output = f"{layer_i}\t{head_i}\t{similar_layer_head[0]}\t{similar_layer_head[1]}\t{min_diff}"
           # open('results/similar_block_attention_result.txt', 'a', encoding='utf-8').write(output + '\n')
