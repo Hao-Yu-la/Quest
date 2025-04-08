@@ -434,6 +434,17 @@ class LlamaModel(LlamaPreTrainedModel):
         # Configure Quest Controller
         # Prepare indices/indptr for newly appended tokens
         assert self.iController is not None, "Please init Quest Controller first."
+
+        # During the decoding stage, make sure there is free space for the new tokens
+        if seq_length == 1:
+            if self.iController.kv_cache.last_page_len == self.iController.kv_cache.pool.block_len: # need to allocate new page
+                for layer_idx in range(self.config.num_hidden_layers):
+                    if self.iController.kv_cache.pool.num_free_blocks[layer_idx] == 0:
+                        self.iController.evict_pages(layer_idx, 1)
+                    if self.iController.kv_cache_cpu is not None:
+                        # 将数据从 GPU 拷贝到 CPU
+                        self.iController.async_move_to_cpu(layer_idx, self.iController.metadata_cache.seqlen - 1)
+                    
         self.iController.prepare_metadata(seq_length)
 
         # Skip layers by setting infinite budgets
@@ -533,11 +544,13 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
     def quest_init(
         self,
         page_size: int,
-        max_seq_len: int,
+        max_seq_len: int | list[int],
         token_budget: int = 512,
         dtype: torch.dtype = torch.float16,
         device = torch.device("cuda:0"),
         topp: float = None,
+        max_seq_len_cpu: int = 0,
+        max_kvmetadata_len: int = 0,
     ):
         """
         Init function for Quest. Must be called before forwarding.
@@ -550,6 +563,10 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         self.model._quest_page_budget = token_budget // page_size # default page budget
         self.model._quest_max_page_limit = 1024*1024 # arbitraty large size
         self.model._quest_skip_layer = 2
+        if isinstance(max_seq_len, int):
+            max_seq_len = [max_seq_len] * config.num_hidden_layers
+        assert len(max_seq_len) == config.num_hidden_layers, "max_seq_len must be a list of length num_hidden_layers"
+        assert all([x > 0 for x in max_seq_len]), "max_seq_len must be a list of positive integers"
         
         self.model.iController = InferenceController(
             num_layers=config.num_hidden_layers,
@@ -558,14 +575,18 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             head_dim=config.hidden_size // config.num_attention_heads,
             page_size=page_size,
             page_budget=self.model._quest_page_budget,
-            max_seq_len=[max_seq_len] * config.num_hidden_layers, # Used for allocating KV Pools
+            max_seq_len=max_seq_len, # Used for allocating KV Pools
             dtype=dtype,
             device=device,
             quest_skip_layer=self.model._quest_skip_layer,
-            topp=topp
+            topp=topp,
+            max_seq_len_cpu=max_seq_len_cpu,
+            max_kvmetadata_len=max_kvmetadata_len,
         )
         
         print(f"Quest allocates KV-Cache of {max_seq_len} tokens")
+        if max_seq_len_cpu > 0:
+            print(f"Quest allocates CPU-Cache of {max_seq_len_cpu} tokens")
         print(f"Token budget is set to {token_budget}")
     
     def quest_clear(self):

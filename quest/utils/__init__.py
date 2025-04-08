@@ -92,23 +92,84 @@ def append_kv(
         layer_idx: Layer index of the KV cache.
     """
     seq_len = k.size(0)
-    if seq_len > 1:
-        _kernels.append_kv_cache_prefill(
-            k,
-            v,
-            iController.kv_cache.buf_layer(layer_idx),
-            iController.kv_indices_with_last[layer_idx],
-            iController.kv_indptr_for_append[layer_idx],
-            iController.kv_cache.last_page_len,
-            iController.kv_last_page_idx[layer_idx],
-            iController.metadata_cache.buf_layer(layer_idx),
-            iController.metadata_indices[layer_idx],
-            iController.metadata_indptr_for_append[layer_idx],
-            iController.metadata_cache.last_page_len,
-            iController.metadata_last_page_idx[layer_idx],
-            iController.layout
-        )
-    else:
+    if seq_len > 1: # Prefill
+        allocated_kv_cache_page_num = iController.kv_indptr_for_append[layer_idx][1] - iController.kv_indptr_for_append[layer_idx][0]
+        full_kv_cache_page_num = (k.size(0) + iController.page_size - 1) // iController.page_size
+        # GPU上的空间足够，直接使用 GPU KV cache
+        if allocated_kv_cache_page_num >= full_kv_cache_page_num:
+            _kernels.append_kv_cache_prefill(
+                k,
+                v,
+                iController.kv_cache.buf_layer(layer_idx),
+                iController.kv_indices_with_last[layer_idx],
+                iController.kv_indptr_for_append[layer_idx],
+                iController.kv_cache.last_page_len,
+                iController.kv_last_page_idx[layer_idx],
+                iController.metadata_cache.buf_layer(layer_idx),
+                iController.metadata_indices[layer_idx],
+                iController.metadata_indptr_for_append[layer_idx],
+                iController.metadata_cache.last_page_len,
+                iController.metadata_last_page_idx[layer_idx],
+                iController.layout
+            )
+            # Update the metadata cache
+            for i in range(allocated_kv_cache_page_num):
+                iController.metadata_cache.update_page_store_index(layer_idx, i, iController.kv_indices_with_last[layer_idx][i])
+                if iController.kv_cache_cpu is not None: # 将数据从 GPU 拷贝到 CPU
+                    iController.async_move_to_cpu(layer_idx, i)
+        else:
+            # 使用一个中间临时变量来存储完整的 key 和 value，然后按照重要性保存一部分到 GPU KV cache 中
+            temp_kv_cache_buf = torch.empty(
+            (full_kv_cache_page_num, 2, iController.page_size, iController.num_key_value_heads, iController.head_dim),
+            dtype=iController.dtype,
+            device=iController.device)
+            temp_kv_indices_with_last = torch.tensor(
+            range(0, temp_kv_cache_buf.size(0)),
+            dtype=torch.int32,
+            device=iController.device)
+            temp_kv_indptr_for_append = torch.tensor(
+            [0, temp_kv_cache_buf.size(0)],
+            dtype=torch.int32,
+            device=iController.device)
+        
+            _kernels.append_kv_cache_prefill(
+                k,
+                v,
+                temp_kv_cache_buf, # iController.kv_cache.buf_layer(layer_idx),
+                temp_kv_indices_with_last, # iController.kv_indices_with_last[layer_idx],
+                temp_kv_indptr_for_append, #iController.kv_indptr_for_append[layer_idx],
+                iController.kv_cache.last_page_len,
+                temp_kv_indices_with_last[-1], #iController.kv_last_page_idx[layer_idx],
+                iController.metadata_cache.buf_layer(layer_idx),
+                iController.metadata_indices[layer_idx],
+                iController.metadata_indptr_for_append[layer_idx],
+                iController.metadata_cache.last_page_len,
+                iController.metadata_last_page_idx[layer_idx],
+                iController.layout
+            )
+            if iController.kv_cache_cpu is not None: # 将数据从 GPU 拷贝到 CPU
+                with torch.cuda.stream(iController.kv_cache_cpu._streams["d2h"]):
+                    iController.kv_cache_cpu._bufs[layer_idx][:full_kv_cache_page_num].copy_(
+                        temp_kv_cache_buf[:],
+                        non_blocking=True
+                    )
+            # 保留开头和最后的部分 KV cache
+            for i in range(allocated_kv_cache_page_num // 2):
+                iController.kv_cache.buf_layer(layer_idx)[iController.kv_indices_with_last[layer_idx][i]] = temp_kv_cache_buf[i].clone()
+                # Update the metadata cache
+                iController.metadata_cache.update_page_store_index(layer_idx, i, iController.kv_indices_with_last[layer_idx][i])
+            for i in range(allocated_kv_cache_page_num // 2, allocated_kv_cache_page_num):
+                iController.kv_cache.buf_layer(layer_idx)[iController.kv_indices_with_last[layer_idx][i]] = temp_kv_cache_buf[i + full_kv_cache_page_num - allocated_kv_cache_page_num].clone()
+                # Update the metadata cache
+                iController.metadata_cache.update_page_store_index(layer_idx, i + full_kv_cache_page_num - allocated_kv_cache_page_num, iController.kv_indices_with_last[layer_idx][i])
+            # 释放临时变量
+            del temp_kv_indices_with_last
+            del temp_kv_indptr_for_append
+            if iController.kv_cache_cpu is not None: 
+                iController.sync_d2h() # 等待数据拷贝完成
+            del temp_kv_cache_buf
+        
+    else: # Decode
         _kernels.append_kv_cache_decode(
             k,
             v,
@@ -124,6 +185,8 @@ def append_kv(
             iController.metadata_last_page_idx[layer_idx],
             iController.layout
         )
+        # Update the metadata cache
+        iController.metadata_cache.update_page_store_index(layer_idx, iController.metadata_cache.seqlen - 1, iController.kv_indices_with_last[layer_idx][-1])
 
 def prefill_forward(
     q: torch.Tensor,
@@ -230,7 +293,7 @@ def decode_topk(
     f = _kernels.topk_filtering
     f(
         estimated_attn_score,
-        iController.kv_indices_without_last,
+        iController.kv_cache_indices_for_topk,
         iController.topk_dout_buffer,
         iController.topk_dindices_buffer,
         iController.topk_buf,
@@ -262,7 +325,7 @@ def decode_topp(
     try:
         f(
             estimated_attn_score,
-            iController.kv_indices_without_last,
+            iController.kv_cache_indices_for_topk,
             iController.topk_dout_buffer,
             iController.topk_dindices_buffer,
             iController.topp_num,
@@ -274,7 +337,7 @@ def decode_topp(
         print(f"Error details: {e}")
         print(f"Arguments:")
         print(f"  estimated_attn_score: {estimated_attn_score.shape}, {estimated_attn_score.dtype}")
-        print(f"  kv_indices_without_last: {iController.kv_indices_without_last.shape}, {iController.kv_indices_without_last.dtype}")
+        print(f"  kv_cache_indices_for_topk: {iController.kv_cache_indices_for_topk.shape}, {iController.kv_cache_indices_for_topk.dtype}")
         print(f"  topk_dout_buffer: {iController.topk_dout_buffer.shape}, {iController.topk_dout_buffer.dtype}")
         print(f"  topk_dindices_buffer: {iController.topk_dindices_buffer.shape}, {iController.topk_dindices_buffer.dtype}")
         print(f"  topp_num: {iController.topp_num.shape}, {iController.topp_num.dtype}")
@@ -290,6 +353,8 @@ def decode_sparse_attn(
     topk_indices: torch.Tensor,
     rope_scale: Optional[float] = None,
     rope_theta: Optional[float] = None,
+    use_estimate: bool = True,
+    use_cpu_cache: bool = False,
 ) -> torch.Tensor:
     """
     Semantics of `decode_sparse_attn`:
@@ -310,10 +375,54 @@ def decode_sparse_attn(
     """
     # When using topp, we need to modify the iController.kv_indptr_for_approx_decode according to the iController.topp_num
     # set the select page number to the max(iController.topp_num), which is the max number of pages we select.
-    if iController.topp is not None:
+    if use_estimate and iController.topp is not None:
         selected_page_num = iController.topp_num.max()
         iController.kv_indptr_for_approx_decode = torch.tensor([0, selected_page_num], dtype=torch.int32, device=iController.device)
-    
+
+    # The topk_indices is the indices of the selected pages in the kv cache metadata.
+    # We need to convert them to the indices in the kv cache.
+    if use_estimate:
+        if use_cpu_cache:
+            # Using CPU cache
+            kv_page_store_idx = torch.stack([iController.metadata_cache._store_indexes[layer_idx][topk_indices[i]] for i in range(topk_indices.size(0))])
+            exist_kv_page_indices = torch.unique(topk_indices[kv_page_store_idx >= 0])
+            missed_kv_page_indices = torch.unique(topk_indices[kv_page_store_idx < 0])
+            # If the page is not in the kv cache, we need to load it from the CPU cache.
+            if len(missed_kv_page_indices) > 0:
+                # First we need to free the memory of the kv cache.
+                if iController.kv_cache.pool.num_free_blocks[layer_idx] < len(missed_kv_page_indices):
+                    iController.evict_pages(layer_idx, len(missed_kv_page_indices) - iController.kv_cache.pool.num_free_blocks[layer_idx], except_pages=exist_kv_page_indices)
+                # Then we need to load the pages from the CPU cache.
+                num_free_blocks = iController.kv_cache.pool.num_free_blocks[layer_idx]
+                for i in range(min(len(missed_kv_page_indices), num_free_blocks)):
+                    page_idx = missed_kv_page_indices[i]
+                    # Update the metadata cache
+                    page_store_idx = iController.kv_cache.allocate_page(layer_idx)
+                    iController.metadata_cache.update_page_store_index(layer_idx, page_idx, page_store_idx)
+                    # Load the page from the CPU cache
+                    iController.async_move_to_gpu(layer_idx, page_idx)
+                iController.sync_h2d() # 等待数据拷贝完成
+            
+        min_page_num = iController.kv_indptr_for_approx_decode[1]
+        for i in range(topk_indices.size(0)): # for each head
+            kv_page_store_idx = iController.metadata_cache._store_indexes[layer_idx][topk_indices[i]]
+            ## save the selected page index info in file
+            # if -1 in kv_page_store_idx:
+            #     with open("/home/zhanghaoyu/project/quest/tmp/selected_kv_block.jsonl", "a") as f:
+            #         record = {
+            #             "layer": layer_idx,
+            #             "head": i,
+            #             "kv_page_selected": topk_indices[i].tolist(),
+            #             "kv_page_store_idx": kv_page_store_idx.tolist(),
+            #         }
+            #         f.write(json.dumps(record) + "\n")
+            # remove pages that are not in the kv cache
+            kv_page_store_idx = kv_page_store_idx[kv_page_store_idx >= 0]
+            min_page_num = min(min_page_num, kv_page_store_idx.size(0))
+            topk_indices[i][:kv_page_store_idx.size(0)] = kv_page_store_idx
+            topk_indices[i][kv_page_store_idx.size(0):] = -1
+        iController.kv_indptr_for_approx_decode = torch.tensor([0, min_page_num], dtype=torch.int32, device=iController.device) 
+
     o = torch.empty_like(q, dtype=q.dtype, device=q.device)
     iController._decode_handler.forward(
         q,

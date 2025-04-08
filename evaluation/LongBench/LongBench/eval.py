@@ -87,7 +87,10 @@ if __name__ == '__main__':
         if not filename.endswith("jsonl"):
             continue
         predictions, answers, lengths = [], [], []
-        dataset = filename.split('.')[0]
+        dataset_fullname = filename.removesuffix('.jsonl')
+        dataset = dataset_fullname
+        if "_quest" in dataset_fullname:
+            dataset = dataset_fullname.split('_quest')[0]
         with open(f"{path}{filename}", "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
@@ -100,7 +103,7 @@ if __name__ == '__main__':
             score = scorer_e(dataset, predictions, answers, lengths, all_classes)
         else:
             score = scorer(dataset, predictions, answers, all_classes)
-        scores[dataset] = score
+        scores[dataset_fullname] = score
     if args.e:
         out_path = f"pred_e/{args.model}/result.json"
     else:

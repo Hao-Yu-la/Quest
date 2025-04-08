@@ -141,14 +141,15 @@ class QuestAttention(nn.Module):
             )
             torch.cuda.nvtx.range_pop()
         else:
-            # Skipping layers is controled by PAGE_BUDGET, which is set in LlamaModel.
+            # Skipping layers is controled by PAGE_BUDGET, which is set in LlamaModel.            
             if iController.need_estimate(self.layer_idx) == False:
                 torch.cuda.nvtx.range_push("full_attn")
                 attn_output = quest.utils.decode_sparse_attn(
                     query_states,
                     iController,
                     self.layer_idx,
-                    iController.kv_indices_without_last,
+                    iController.kv_indices_without_last[self.layer_idx],
+                    use_estimate=False,
                 )
                 torch.cuda.nvtx.range_pop()
             else:
@@ -167,6 +168,12 @@ class QuestAttention(nn.Module):
                         iController,
                     )
                     torch.cuda.nvtx.range_pop()
+                    # with open("/home/zhanghaoyu/project/quest/tmp/topp_num_" + str(iController.topp) + ".jsonl", "a") as f:
+                    #     record = {
+                    #     "layer_idx": self.layer_idx
+                    #     "topp_num": iController.topp_num.tolist(), 
+                    #     }
+                    #     f.write(json.dumps(record) + "\n")
                 else: # Topk sampling
                     torch.cuda.nvtx.range_push("topk")
                     quest.utils.decode_topk(
@@ -175,18 +182,20 @@ class QuestAttention(nn.Module):
                     )
                     torch.cuda.nvtx.range_pop()
 
-                # with open("/home/zhanghaoyu/project/quest/tmp/topp_num_" + str(iController.topp) + ".json", "a") as f:
-                #     record = {
-                #     "topp_num": iController.topp_num.tolist(), 
-                #     "layer_idx": self.layer_idx
-                #     }
-                #     f.write(json.dumps(record) + "\n")
+
+                # 根据 decode_estimate 结果给 metadata 中的 importance 赋值
+                iController.metadata_cache.update_page_importance_layer(
+                    self.layer_idx,
+                    estimated_attn_score.mean(dim=0))
+
                 torch.cuda.nvtx.range_push("approx_attn")
                 attn_output = quest.utils.decode_sparse_attn(
                     query_states,
                     iController,
                     self.layer_idx,
                     iController.topk_dindices_buffer,
+                    use_estimate=True,
+                    use_cpu_cache=(iController.kv_cache_cpu != None),
                 )
                 torch.cuda.nvtx.range_pop()
 

@@ -15,16 +15,29 @@ RUNTIME_CFGS = [
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--method", choices=RUNTIME_CFGS, default="quest")
-parser.add_argument("--token_budget", type=int, default=1024)
-parser.add_argument("--topp", type=float, default=0.8)
+parser.add_argument("--token_budget", type=int, default=512)
+parser.add_argument("--topp", type=float, default=None)
+parser.add_argument("--max_seq_len", type=str, default="1024", help="max sequence length for quest, can be a int or a list of int (for example: 512,1024,1024)")
+parser.add_argument("--max_seq_len_cpu", type=int, default=0)
 args = parser.parse_args()
+
+if "," in args.max_seq_len:
+    max_seq_len = [int(length) for length in args.max_seq_len.split(",")]
+else:
+    max_seq_len = int(args.max_seq_len)
+
+max_seq_len = [1024 for _ in range(32)]
+max_seq_len[0] = 2048
+max_seq_len[1] = 2048
+
+args.max_seq_len_cpu = 2048
 
 if args.method == "quest":
     from quest import LlamaForCausalLM
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)
 
     # Init Quest Controller
-    model.quest_init(page_size=16, max_seq_len=8192, token_budget=args.token_budget, topp=args.topp)
+    model.quest_init(page_size=16, max_seq_len=max_seq_len, token_budget=args.token_budget, topp=args.topp, max_seq_len_cpu=args.max_seq_len_cpu)
 else:
     from transformers import LlamaForCausalLM
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)
@@ -39,4 +52,6 @@ generate_ids = model.generate(
                             use_cache=True, # Managed by our InferenceController
                             num_logits_to_keep=1,
                             )
+if args.method == "quest":
+    model.quest_clear()
 print(tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0])

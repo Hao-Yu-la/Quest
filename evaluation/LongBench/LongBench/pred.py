@@ -15,7 +15,6 @@ RUNTIME_CFGS = [
     "quest",
     "hg",
 ]
-DEVICE = torch.device("cuda:0")
 DTYPE = torch.float16
 
 def parse_args(args=None):
@@ -27,6 +26,7 @@ def parse_args(args=None):
     parser.add_argument("--token_budget", type=int, default=None)
     parser.add_argument("--page_size", type=int, default=16)
     parser.add_argument("--topp", type=float, default=None)
+    parser.add_argument("--device", type=str, default="cuda:0")
     return parser.parse_args(args)
 
 # This is the customized building prompt for chat models
@@ -92,6 +92,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
                 temperature=1.0,
                 min_length=context_length+1,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
+                num_logits_to_keep=1,
             )[0]
         else:
             output = model.generate(
@@ -100,6 +101,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
                 num_beams=1,
                 do_sample=False,
                 temperature=1.0,
+                num_logits_to_keep=1,
             )[0]
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
@@ -142,13 +144,13 @@ def load_model_and_tokenizer(path, model_name, device):
     tokenizer = AutoTokenizer.from_pretrained(path)
     if args.method == "quest":
         from quest import LlamaForCausalLM
-        model = LlamaForCausalLM.from_pretrained(path, device_map=DEVICE, torch_dtype=DTYPE)
+        model = LlamaForCausalLM.from_pretrained(path, device_map=device, torch_dtype=DTYPE)
 
         # Init Quest Controller
-        model.quest_init(page_size=args.page_size, max_seq_len=max_length[model], token_budget=args.token_budget, topp=args.topp)
+        model.quest_init(page_size=args.page_size, max_seq_len=max_length + 512, token_budget=args.token_budget, topp=args.topp)
     else:
         from transformers import LlamaForCausalLM
-        model = LlamaForCausalLM.from_pretrained(path, device_map=DEVICE, torch_dtype=DTYPE)
+        model = LlamaForCausalLM.from_pretrained(path, device_map=device, torch_dtype=DTYPE)
     model = model.eval()
     return model, tokenizer
 
@@ -158,9 +160,9 @@ if __name__ == '__main__':
 
     model2path = json.load(open("config/model2path.json", "r"))
     model2maxlen = json.load(open("config/model2maxlen.json", "r"))
-    device = DEVICE
+    device = torch.device(args.device)
     model_name = args.model
-    # define your model
+    # define your model1
     max_length = model2maxlen[model_name]
     model, tokenizer = load_model_and_tokenizer(model2path[model_name], model_name, device)
     if args.e:
@@ -179,7 +181,8 @@ if __name__ == '__main__':
     for dataset in datasets:
         if args.e:
             # data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
-            data = json.load(open(f'/home/zhanghaoyu/datasets/LongBench/{dataset}_e.jsonl', 'r', encoding='utf-8'))
+            with open(f'/home/zhanghaoyu/datasets/LongBench/data/{dataset}_e.jsonl', 'r', encoding='utf-8') as f:
+                data = [json.loads(line) for line in f.readlines()]
             if not os.path.exists(f"pred_e/{model_name}"):
                 os.makedirs(f"pred_e/{model_name}")
             out_path = f"pred_e/{model_name}/{dataset}.jsonl"
@@ -190,7 +193,8 @@ if __name__ == '__main__':
                 out_path += ".jsonl"
         else:
             # data = load_dataset('THUDM/LongBench', dataset, split='test')
-            data = json.load(open(f'/home/zhanghaoyu/datasets/LongBench/{dataset}.jsonl', 'r', encoding='utf-8'))
+            with open(f'/home/zhanghaoyu/datasets/LongBench/data/{dataset}.jsonl', 'r', encoding='utf-8') as f:
+                data = [json.loads(line) for line in f.readlines()]
             if not os.path.exists(f"pred/{model_name}"):
                 os.makedirs(f"pred/{model_name}")
             out_path = f"pred/{model_name}/{dataset}.jsonl"
@@ -202,4 +206,4 @@ if __name__ == '__main__':
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
         data_all = [data_sample for data_sample in data]
-        preds = get_pred(model, tokenizer, data_all, max_length, max_gen, prompt_format, dataset, DEVICE, model_name, out_path)
+        preds = get_pred(model, tokenizer, data_all, max_length, max_gen, prompt_format, dataset, device, model_name, out_path)

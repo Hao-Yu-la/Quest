@@ -60,7 +60,8 @@ def query_llm(prompt, model, tokenizer, client=None, temperature=0.5, max_new_to
             generate_ids = client.generate(
                             inputs.input_ids,
                             max_length=max_new_tokens+inputs.input_ids.shape[1],
-                            use_cache=True # Managed by our InferenceController
+                            use_cache=True, # Managed by our InferenceController
+                            num_logits_to_keep=1,
                             )
             response = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
             response = response.removeprefix(prompt)
