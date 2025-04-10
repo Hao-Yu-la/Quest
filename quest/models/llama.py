@@ -567,6 +567,10 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             max_seq_len = [max_seq_len] * config.num_hidden_layers
         assert len(max_seq_len) == config.num_hidden_layers, "max_seq_len must be a list of length num_hidden_layers"
         assert all([x > 0 for x in max_seq_len]), "max_seq_len must be a list of positive integers"
+        if max_seq_len_cpu > 0:
+            assert max_seq_len_cpu >= max(max_seq_len), "max_seq_len_cpu should be greater than max_seq_len"
+        if max_kvmetadata_len <= 0:
+            max_kvmetadata_len = math.ceil(max(max(max_seq_len), max_seq_len_cpu) / page_size)
         
         self.model.iController = InferenceController(
             num_layers=config.num_hidden_layers,
@@ -585,6 +589,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         )
         
         print(f"Quest allocates KV-Cache of {max_seq_len} tokens")
+        print(f"max_kvmetadata_len is set to {max_kvmetadata_len}")
         if max_seq_len_cpu > 0:
             print(f"Quest allocates CPU-Cache of {max_seq_len_cpu} tokens")
         print(f"Token budget is set to {token_budget}")

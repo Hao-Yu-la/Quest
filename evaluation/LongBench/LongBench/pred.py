@@ -27,7 +27,18 @@ def parse_args(args=None):
     parser.add_argument("--page_size", type=int, default=16)
     parser.add_argument("--topp", type=float, default=None)
     parser.add_argument("--device", type=str, default="cuda:0")
-    return parser.parse_args(args)
+    parser.add_argument("--max_seq_len", type=str, default="1024", help="max sequence length for quest, can be a int or a list of int (for example: 512,1024,1024)")
+    parser.add_argument("--max_seq_len_cpu", type=int, default=0)
+    parser.add_argument("--max_kvmetadata_len", type=int, default=0)
+    args = parser.parse_args(args)
+    if "," in args.max_seq_len:
+        args.max_seq_len = [int(length) for length in args.max_seq_len.split(",")]
+    else:
+        args.max_seq_len = int(args.max_seq_len)
+        args.max_seq_len = [args.max_seq_len for _ in range(32)]
+        # args.max_seq_len[0] = 32768
+        # args.max_seq_len[1] = 32768
+    return args
 
 # This is the customized building prompt for chat models
 def build_chat(tokenizer, prompt, model_name):
@@ -147,7 +158,7 @@ def load_model_and_tokenizer(path, model_name, device):
         model = LlamaForCausalLM.from_pretrained(path, device_map=device, torch_dtype=DTYPE)
 
         # Init Quest Controller
-        model.quest_init(page_size=args.page_size, max_seq_len=max_length + 512, token_budget=args.token_budget, topp=args.topp)
+        model.quest_init(page_size=args.page_size, max_seq_len=args.max_seq_len, token_budget=args.token_budget, topp=args.topp, max_seq_len_cpu=args.max_seq_len_cpu, max_kvmetadata_len=args.max_kvmetadata_len)
     else:
         from transformers import LlamaForCausalLM
         model = LlamaForCausalLM.from_pretrained(path, device_map=device, torch_dtype=DTYPE)

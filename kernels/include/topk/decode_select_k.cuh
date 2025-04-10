@@ -37,40 +37,60 @@ void decode_select_k(const T* in,
 					 IdxT* out_idx,
 					 bool greater = true,
 					 raft::matrix::SelectAlgo _algo = raft::matrix::SelectAlgo::kRadix8bits) {
-   // Parameters from kRadix8Bits
-   constexpr int BitsPerPass = 8;
-   constexpr int BlockSize = 512;
-   auto kernel = radix_topk_one_block_kernel<T, IdxT, BitsPerPass, BlockSize>;
+   
+   // 返回排好序的top-k
+   raft::resources handle;
+   cudaStream_t stream = raft::resource::get_cuda_stream(handle); // 获取关联的 CUDA 流
+   raft::matrix::detail::select_k<T, IdxT>(handle,
+                                   in,
+                                   in_idx,
+                                   batch_size,
+                                   len,
+                                   k,
+                                   out,
+                                   out_idx,
+                                   !greater,
+                                   nullptr,
+                                   true,
+                                   raft::matrix::SelectAlgo::kRadix8bits
+   );
+   raft::resource::sync_stream(handle);  // 等待操作完成
+   
+   // // Parameters from kRadix8Bits
+   // constexpr int BitsPerPass = 8;
+   // constexpr int BlockSize = 512;
+   // auto kernel = radix_topk_one_block_kernel<T, IdxT, BitsPerPass, BlockSize>;
 
-   int sm_cnt;
-   {
-     int dev;
-      (cudaGetDevice(&dev));
-      (cudaDeviceGetAttribute(&sm_cnt, cudaDevAttrMultiProcessorCount, dev));
-   }
+   // int sm_cnt;
+   // {
+   //   int dev;
+   //    (cudaGetDevice(&dev));
+   //    (cudaDeviceGetAttribute(&sm_cnt, cudaDevAttrMultiProcessorCount, dev));
+   // }
 
-   const size_t max_chunk_size = calc_chunk_size<T, IdxT, BlockSize>(batch_size, len, sm_cnt, kernel, true);
-   // const size_t buf_size = max_chunk_size * buf_len * 2 * (sizeof(T) + sizeof(IdxT));
-   // const IdxT buf_len = calc_buf_len<T, IdxT, unsigned>(len);
+   // const size_t max_chunk_size = calc_chunk_size<T, IdxT, BlockSize>(batch_size, len, sm_cnt, kernel, true);
+   // // const size_t buf_size = max_chunk_size * buf_len * 2 * (sizeof(T) + sizeof(IdxT));
+   // // const IdxT buf_len = calc_buf_len<T, IdxT, unsigned>(len);
 
-   for (size_t offset = 0; offset < static_cast<size_t>(batch_size); offset += max_chunk_size) {
-      int chunk_size = std::min(max_chunk_size, batch_size - offset);
-      kernel<<<chunk_size, BlockSize, 0, nullptr>>>(in + offset * len,
-                                                   in_idx ? (in_idx + offset * len) : nullptr,
-                                                   len,
-                                                   k,
-                                                   out + offset * k,
-                                                   out_idx + offset * k,
-                                                   !greater,
-                                                   bufs);
-   }
+   // for (size_t offset = 0; offset < static_cast<size_t>(batch_size); offset += max_chunk_size) {
+   //    int chunk_size = std::min(max_chunk_size, batch_size - offset);
+   //    kernel<<<chunk_size, BlockSize, 0, nullptr>>>(in + offset * len,
+   //                                                 in_idx ? (in_idx + offset * len) : nullptr,
+   //                                                 len,
+   //                                                 k,
+   //                                                 out + offset * k,
+   //                                                 out_idx + offset * k,
+   //                                                 !greater,
+   //                                                 bufs);
+   // }
+
 }
 
 // This kernel computes the top-k elements and their indices from the input tensor
 // It uses shared memory to store intermediate results and performs a reduction
 // to find the top-k elements efficiently
 template <typename T, typename IdxT>
-__global__ __forceinline__ void compute_top_p_kernel(const T* in,
+static __global__ void compute_top_p_kernel(const T* in,
                               IdxT len,
                               IdxT max_k,
                               const float top_p,
@@ -149,10 +169,29 @@ void decode_select_p(const T* in,
                 IdxT* out_k,
 					 bool greater = true,
 					 raft::matrix::SelectAlgo _algo = raft::matrix::SelectAlgo::kRadix8bits) {
-   // Parameters from kRadix8Bits
-   constexpr int BitsPerPass = 8;
+
+   // 返回排好序的top-k
+   raft::resources handle;
+   cudaStream_t stream = raft::resource::get_cuda_stream(handle); // 获取关联的 CUDA 流
+   raft::matrix::detail::select_k<T, IdxT>(handle,
+                                   in,
+                                   in_idx,
+                                   batch_size,
+                                   len,
+                                   k,
+                                   out,
+                                   out_idx,
+                                   !greater,
+                                   nullptr,
+                                   true,
+                                   raft::matrix::SelectAlgo::kRadix8bits
+   );
+   raft::resource::sync_stream(handle);  // 等待操作完成
+
+   // // Parameters from kRadix8Bits
+   // constexpr int BitsPerPass = 8;
    constexpr int BlockSize = 512;
-   auto kernel = radix_topk_one_block_kernel<T, IdxT, BitsPerPass, BlockSize>;
+   // auto kernel = radix_topk_one_block_kernel<T, IdxT, BitsPerPass, BlockSize>;
    auto top_p_kernel = compute_top_p_kernel<T, IdxT>;
 
    int sm_cnt;
@@ -162,21 +201,22 @@ void decode_select_p(const T* in,
       (cudaDeviceGetAttribute(&sm_cnt, cudaDevAttrMultiProcessorCount, dev));
    }
 
-   const size_t max_chunk_size = calc_chunk_size<T, IdxT, BlockSize>(batch_size, len, sm_cnt, kernel, true);
-   // const size_t buf_size = max_chunk_size * buf_len * 2 * (sizeof(T) + sizeof(IdxT));
-   // const IdxT buf_len = calc_buf_len<T, IdxT, unsigned>(len);
+   const size_t max_chunk_size = calc_chunk_size<T, IdxT, BlockSize>(batch_size, len, sm_cnt, top_p_kernel, true);
+   // const size_t max_chunk_size = calc_chunk_size<T, IdxT, BlockSize>(batch_size, len, sm_cnt, kernel, true);
+   // // const size_t buf_size = max_chunk_size * buf_len * 2 * (sizeof(T) + sizeof(IdxT));
+   // // const IdxT buf_len = calc_buf_len<T, IdxT, unsigned>(len);
 
    size_t shared_mem_size = k * sizeof(T); // Shared memory size
    for (size_t offset = 0; offset < static_cast<size_t>(batch_size); offset += max_chunk_size) {
       int chunk_size = std::min(max_chunk_size, batch_size - offset);
-      kernel<<<chunk_size, BlockSize, 0, nullptr>>>(in + offset * len,
-                                                   in_idx ? (in_idx + offset * len) : nullptr,
-                                                   len,
-                                                   k,
-                                                   out + offset * k,
-                                                   out_idx + offset * k,
-                                                   !greater,
-                                                   bufs);
+      // kernel<<<chunk_size, BlockSize, 0, nullptr>>>(in + offset * len,
+      //                                              in_idx ? (in_idx + offset * len) : nullptr,
+      //                                              len,
+      //                                              k,
+      //                                              out + offset * k,
+      //                                              out_idx + offset * k,
+      //                                              !greater,
+      //                                              bufs);
       
       // Compute top-p
       // The top-p kernel will be launched with a single block for each batch

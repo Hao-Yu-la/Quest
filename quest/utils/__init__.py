@@ -150,7 +150,7 @@ def append_kv(
             if iController.kv_cache_cpu is not None: # 将数据从 GPU 拷贝到 CPU
                 with torch.cuda.stream(iController.kv_cache_cpu._streams["d2h"]):
                     iController.kv_cache_cpu._bufs[layer_idx][:full_kv_cache_page_num].copy_(
-                        temp_kv_cache_buf[:],
+                        temp_kv_cache_buf,
                         non_blocking=True
                     )
             # 保留开头和最后的部分 KV cache
@@ -192,6 +192,8 @@ def prefill_forward(
     q: torch.Tensor,
     iController: InferenceController,
     layer_idx: int,
+    kv_cache_buf,
+    kv_indices_with_last,
     rope_scale: Optional[float] = None,
     rope_theta: Optional[float] = None,
 ) -> torch.Tensor:
@@ -221,8 +223,8 @@ def prefill_forward(
     f = _kernels.prefill_with_paged_kv_cache
     o = f(
         q,
-        iController.kv_cache.buf_layer(layer_idx),
-        iController.kv_indices_with_last[layer_idx],
+        kv_cache_buf, #iController.kv_cache.buf_layer(layer_idx),
+        kv_indices_with_last, #iController.kv_indices_with_last[layer_idx],
         iController.kv_cache.last_page_len,
         True, # Casual
         iController.layout,
@@ -289,7 +291,9 @@ def decode_topk(
         layer_idx: Layer index of the KV cache.
     """
     # excluding the last page
-    page_budet = iController.inference_page_budget - 1
+    page_budet = iController.metadata_cache.seqlen - 1
+    # assert page_budet <= estimated_attn_score.size(1), f"page_budget: {page_budet}, estimated_attn_score: {estimated_attn_score.size(1)}"
+    # page_budet = iController.inference_page_budget - 1
     f = _kernels.topk_filtering
     f(
         estimated_attn_score,
@@ -375,6 +379,7 @@ def decode_sparse_attn(
     """
     # When using topp, we need to modify the iController.kv_indptr_for_approx_decode according to the iController.topp_num
     # set the select page number to the max(iController.topp_num), which is the max number of pages we select.
+    iController.kv_indptr_for_approx_decode = torch.tensor([0, iController.inference_page_budget - 1], dtype=torch.int32, device=iController.device)
     if use_estimate and iController.topp is not None:
         selected_page_num = iController.topp_num.max()
         iController.kv_indptr_for_approx_decode = torch.tensor([0, selected_page_num], dtype=torch.int32, device=iController.device)
@@ -382,11 +387,12 @@ def decode_sparse_attn(
     # The topk_indices is the indices of the selected pages in the kv cache metadata.
     # We need to convert them to the indices in the kv cache.
     if use_estimate:
+        min_page_num = iController.kv_indptr_for_approx_decode[1]
         if use_cpu_cache:
             # Using CPU cache
-            kv_page_store_idx = torch.stack([iController.metadata_cache._store_indexes[layer_idx][topk_indices[i]] for i in range(topk_indices.size(0))])
-            exist_kv_page_indices = torch.unique(topk_indices[kv_page_store_idx >= 0])
-            missed_kv_page_indices = torch.unique(topk_indices[kv_page_store_idx < 0])
+            kv_page_store_idx = torch.stack([iController.metadata_cache._store_indexes[layer_idx][topk_indices[i]][:min_page_num] for i in range(topk_indices.size(0))])
+            exist_kv_page_indices = torch.unique(topk_indices[:, :min_page_num][kv_page_store_idx >= 0])
+            missed_kv_page_indices = torch.unique(topk_indices[:, :min_page_num][kv_page_store_idx < 0])
             # If the page is not in the kv cache, we need to load it from the CPU cache.
             if len(missed_kv_page_indices) > 0:
                 # First we need to free the memory of the kv cache.
@@ -403,9 +409,9 @@ def decode_sparse_attn(
                     iController.async_move_to_gpu(layer_idx, page_idx)
                 iController.sync_h2d() # 等待数据拷贝完成
             
-        min_page_num = iController.kv_indptr_for_approx_decode[1]
         for i in range(topk_indices.size(0)): # for each head
             kv_page_store_idx = iController.metadata_cache._store_indexes[layer_idx][topk_indices[i]]
+            # assert all(kv_page_store_idx[:min_page_num] >= 0), f"kv_page_store_idx: {kv_page_store_idx[:min_page_num]}"
             ## save the selected page index info in file
             # if -1 in kv_page_store_idx:
             #     with open("/home/zhanghaoyu/project/quest/tmp/selected_kv_block.jsonl", "a") as f:
@@ -421,7 +427,8 @@ def decode_sparse_attn(
             min_page_num = min(min_page_num, kv_page_store_idx.size(0))
             topk_indices[i][:kv_page_store_idx.size(0)] = kv_page_store_idx
             topk_indices[i][kv_page_store_idx.size(0):] = -1
-        iController.kv_indptr_for_approx_decode = torch.tensor([0, min_page_num], dtype=torch.int32, device=iController.device) 
+        topk_indices = topk_indices[:, :min_page_num].contiguous()
+        iController.kv_indptr_for_approx_decode = torch.tensor([0, min_page_num], dtype=torch.int32, device=iController.device)
 
     o = torch.empty_like(q, dtype=q.dtype, device=q.device)
     iController._decode_handler.forward(

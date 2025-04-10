@@ -134,10 +134,26 @@ class QuestAttention(nn.Module):
         # Prefill/Decode kernels is different
         if q_len > 1:
             torch.cuda.nvtx.range_push("prefill_attn")
+            allocated_kv_cache_page_num = iController.kv_indptr_for_append[self.layer_idx][1] - iController.kv_indptr_for_append[self.layer_idx][0]
+            full_kv_cache_page_num = (q_len + iController.page_size - 1) // iController.page_size
+            if allocated_kv_cache_page_num < full_kv_cache_page_num:
+                pad_len = full_kv_cache_page_num * iController.page_size - q_len
+                k_padded = F.pad(key_states, (0, 0, 0, 0, 0, pad_len))  # 在序列维度（第0维）右侧填充
+                v_padded = F.pad(value_states, (0, 0, 0, 0, 0, pad_len))
+                k_reshaped = k_padded.view(full_kv_cache_page_num, iController.page_size, *key_states.shape[1:])
+                v_reshaped = v_padded.view(full_kv_cache_page_num, iController.page_size, *value_states.shape[1:])
+                kv_cache = torch.stack([k_reshaped, v_reshaped], dim=1)
+                kv_indices_with_last = torch.arange(0, full_kv_cache_page_num, dtype=torch.int32).to(kv_cache.device)
+            else:
+                kv_cache = iController.kv_cache.buf_layer(self.layer_idx)
+                kv_indices_with_last = iController.kv_indices_with_last[self.layer_idx]
+
             attn_output = quest.utils.prefill_forward(
                 query_states,
                 iController,
                 self.layer_idx,
+                kv_cache,
+                kv_indices_with_last,
             )
             torch.cuda.nvtx.range_pop()
         else:

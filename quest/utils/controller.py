@@ -27,10 +27,6 @@ class InferenceController:
         assert all(m > 0 for m in max_seq_len), "max_seq_len should be a list with positive integers"
         assert page_size > 0, "page_size should be a positive integer"
         assert page_budget > 0, "page_budget should be a positive integer"
-        if max_seq_len_cpu > 0:
-            assert max_seq_len_cpu >= max(max_seq_len), "max_seq_len_cpu should be greater than max_seq_len"
-        if max_kvmetadata_len <= 0:
-            max_kvmetadata_len = max(max(max_seq_len), max_seq_len_cpu)
         
         self.kv_cache = KvCache(
             num_layers=num_layers,
@@ -135,8 +131,8 @@ class InferenceController:
         else:
             # decode requests
             # append_kv_cache_decode, estimate_attn_score, topk_filtering
-            cur_page_nums = [len(self.kv_cache.indicies(layer_idx)) for layer_idx in range(self.num_layers)] # 当前 GPU 上 KV Cache 的 page 数量
-            assert all(x > 1 for x in cur_page_nums), "The number of pages in KV Cache should be greater than 1 for decoding" # at least two pages for excluding last page
+            cur_page_nums = self.metadata_cache.seqlen
+            assert cur_page_nums > 1, "The number of pages in KV Cache should be greater than 1 for decoding" # at least two pages for excluding last page
 
             if updateTensor:
                 # used for appending
@@ -149,14 +145,16 @@ class InferenceController:
                 self.metadata_indices = [torch.tensor(self.metadata_cache.indicies(layer_idx), dtype=torch.int32, device=self.device) for layer_idx in range(self.num_layers)]
 
             # used as page_budget for topk and approx kernel
-            self.inference_page_budget = min(self._page_budget, min(cur_page_nums))
+            self.inference_page_budget = min(self._page_budget, cur_page_nums)
 
             # Exclude the last page for decoding
             self.kv_indptr_for_approx_decode = torch.tensor([0, self.inference_page_budget - 1], dtype=torch.int32, device=self.device)
 
             # Allocate buffer for top-k filtering
-            self.topk_dout_buffer = torch.zeros((self.num_heads, self.inference_page_budget - 1), dtype=self.dtype, device=self.device)
-            self.topk_dindices_buffer = torch.zeros((self.num_heads, self.inference_page_budget - 1), dtype=torch.int32, device=self.device)
+            # self.topk_dout_buffer = torch.zeros((self.num_heads, self.inference_page_budget - 1), dtype=self.dtype, device=self.device)
+            # self.topk_dindices_buffer = torch.zeros((self.num_heads, self.inference_page_budget - 1), dtype=torch.int32, device=self.device)
+            self.topk_dout_buffer = torch.zeros((self.num_heads, self.metadata_cache.seqlen - 1), dtype=self.dtype, device=self.device)
+            self.topk_dindices_buffer = torch.zeros((self.num_heads, self.metadata_cache.seqlen - 1), dtype=torch.int32, device=self.device)
             self.topp_num = torch.zeros((self.num_heads,), dtype=torch.int32, device=self.device)
             self.topk_buf = torch.zeros((self.num_heads, 8192 * 2 * (2+4) // 2 // 48), dtype=self.dtype, device=self.device)
             self.kv_cache_indices_for_topk = torch.tensor(range(self.metadata_cache.seqlen - 1), dtype=torch.int32, device=self.device).repeat(self.num_heads, 1)
@@ -183,7 +181,7 @@ class InferenceController:
         if self.topp is not None and layer_idx >= self.quest_skip_layer:
             return True
 
-        cur_page_nums = len(self.kv_cache.indicies(layer_idx))
+        cur_page_nums = self.metadata_cache.seqlen
         return cur_page_nums > self.inference_page_budget
     
     def using_topp(self) -> bool:
@@ -198,7 +196,8 @@ class InferenceController:
 
     def evict_pages(self, layer_idx: int, num_pages: int, except_pages: torch.Tensor=None) -> int:
         # Evict pages from the cache
-        self.sync_d2h()
+        if self.kv_cache_cpu is not None: 
+            self.sync_d2h()
         min_page, min_kvcache_index = self.metadata_cache.find_least_important_page(layer_idx, num_pages, except_pages)
         for i in range(min_page.size(0)):
             self.metadata_cache.evict_page(layer_idx, min_page[i])
