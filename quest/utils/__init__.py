@@ -324,7 +324,9 @@ def decode_topp(
         iController: InferenceController object, which contains all needed information.
     """
     # excluding the last page
-    page_budet = iController.inference_page_budget - 1
+    page_budet = iController.metadata_cache.seqlen - 1
+    # assert page_budet <= estimated_attn_score.size(1), f"page_budget: {page_budet}, estimated_attn_score: {estimated_attn_score.size(1)}"
+    # page_budet = iController.inference_page_budget - 1
     f = _kernels.topp_filtering
     try:
         f(
