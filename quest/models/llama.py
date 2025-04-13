@@ -557,12 +557,7 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
         This function allocates all GPU memory for max_seq_len KV-Cache.
         """
         assert self.model.iController is None, "Can't init Quest Controller twice."
-        
         config = self._config
-        self.model._quest_page_size = page_size
-        self.model._quest_page_budget = token_budget // page_size # default page budget
-        self.model._quest_max_page_limit = 1024*1024 # arbitraty large size
-        self.model._quest_skip_layer = 2
         if isinstance(max_seq_len, int):
             max_seq_len = [max_seq_len] * config.num_hidden_layers
         assert len(max_seq_len) == config.num_hidden_layers, "max_seq_len must be a list of length num_hidden_layers"
@@ -571,6 +566,11 @@ class LlamaForCausalLM(LlamaPreTrainedModel):
             assert max_seq_len_cpu >= max(max_seq_len), "max_seq_len_cpu should be greater than max_seq_len"
         if max_kvmetadata_len <= 0:
             max_kvmetadata_len = math.ceil(max(max(max_seq_len), max_seq_len_cpu) / page_size)
+        
+        self.model._quest_page_size = page_size
+        self.model._quest_page_budget = token_budget // page_size # default page budget
+        self.model._quest_max_page_limit = max(max_seq_len) // page_size #1024*1024 # arbitraty large size
+        self.model._quest_skip_layer = 2
         
         self.model.iController = InferenceController(
             num_layers=config.num_hidden_layers,

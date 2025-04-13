@@ -23,13 +23,13 @@ parser.add_argument("--max_kvmetadata_len", type=int, default=0)
 args = parser.parse_args()
 
 if "," in args.max_seq_len:
-    max_seq_len = [int(length) for length in args.max_seq_len.split(",")]
+    args.max_seq_len = [int(length) for length in args.max_seq_len.split(",")]
 else:
-    max_seq_len = int(args.max_seq_len)
+    args.max_seq_len = int(args.max_seq_len)
 
-max_seq_len = [8192 for _ in range(32)]
-# max_seq_len[0] = 32000
-# max_seq_len[1] = 32000
+args.max_seq_len = [8192 for _ in range(32)]
+# args.max_seq_len[0] = 32000
+# args.max_seq_len[1] = 32000
 
 args.max_seq_len_cpu = 0
 args.max_kvmetadata_len = 32000
@@ -39,7 +39,7 @@ if args.method == "quest":
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)
 
     # Init Quest Controller
-    model.quest_init(page_size=16, max_seq_len=max_seq_len, token_budget=args.token_budget, topp=args.topp, max_seq_len_cpu=args.max_seq_len_cpu, max_kvmetadata_len=args.max_kvmetadata_len)
+    model.quest_init(page_size=16, max_seq_len=args.max_seq_len, token_budget=args.token_budget, topp=args.topp, max_seq_len_cpu=args.max_seq_len_cpu, max_kvmetadata_len=args.max_kvmetadata_len)
 else:
     from transformers import LlamaForCausalLM
     model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE)

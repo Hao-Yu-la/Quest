@@ -179,7 +179,7 @@ class QuestAttention(nn.Module):
 
                 if iController.using_topp(): # Topp sampling
                     torch.cuda.nvtx.range_push("topp")
-                    attn_output = quest.utils.decode_topp(
+                    quest.utils.decode_topp(
                         estimated_attn_score,
                         iController,
                     )
