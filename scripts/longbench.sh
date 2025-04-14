@@ -2,7 +2,7 @@ cd ./evaluation/LongBench/LongBench
 
 model="Llama-3.1-8B-Instruct"
 
-for task in "gov_report" #"triviaqa" "hotpotqa" "qasper" "narrativeqa" "multifieldqa_en" 
+for task in "triviaqa" "hotpotqa" #"qasper" "narrativeqa" "multifieldqa_en" "gov_report" 
 do
     # for budget in 512 1024 2048 4096 
     # do

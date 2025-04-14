@@ -28,10 +28,10 @@ else:
     args.max_seq_len = int(args.max_seq_len)
 
 args.max_seq_len = [8192 for _ in range(32)]
-# args.max_seq_len[0] = 32000
-# args.max_seq_len[1] = 32000
+args.max_seq_len[0] = 32000
+args.max_seq_len[1] = 32000
 
-args.max_seq_len_cpu = 0
+args.max_seq_len_cpu = 32000
 args.max_kvmetadata_len = 32000
 
 if args.method == "quest":

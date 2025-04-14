@@ -196,7 +196,7 @@ class KvCache:
       raise RuntimeError(f"Invalid seq_len {seq_len} for append_seq")
     return appended_page_count
   
-  def allocate_page(self, layer_idx: int) -> int:
+  def allocate_page(self, layer_idx: int, is_the_last_page=True) -> int:
     """Allocate a page for a layer.
     Args:
       layer_idx: layer index
@@ -206,7 +206,10 @@ class KvCache:
     assert 0 <= layer_idx < self._num_layers
     page_idx = self._pool.alloc_block(layer_idx)
     if page_idx != -1:
-      self._indicies[layer_idx].append(page_idx)
+      if is_the_last_page:
+        self._indicies[layer_idx].append(page_idx)
+      else:
+        self._indicies[layer_idx].insert(0, page_idx)
     return page_idx
 
   def evict_page(self, layer_idx: int, page_idx: int):

@@ -113,24 +113,39 @@ static __global__ void compute_top_p_kernel(const T* in,
    }
    __syncthreads();
 
-   // Compute the sum
-   typedef cub::BlockReduce<T, 512> BlockReduce;
+   // Compute the sum and minimum
+   typedef cub::BlockReduce<float, 512> BlockReduce;
    __shared__ typename BlockReduce::TempStorage temp_storage;
-   T thread_sum = 0;
+   __shared__ typename BlockReduce::TempStorage temp_storage_min;
+   float thread_sum = 0;
+   float thread_min = FLT_MAX;
    for (int i = threadIdx.x; i < len; i += blockDim.x) {
-      thread_sum += current_in[i];
+      float val = static_cast<float>(current_in[i]);
+      thread_sum += val;
+      thread_min = min(thread_min, val);
    }
-   T block_sum = BlockReduce(temp_storage).Sum(thread_sum);
+   float block_sum = BlockReduce(temp_storage).Sum(thread_sum);
+   float block_min = BlockReduce(temp_storage_min).Reduce(thread_min, cub::Min());
    __syncthreads();
 
    // Compute the prefix sum
    if (threadIdx.x == 0) {
-      T cumsum = 0;
-      T threshold = static_cast<T>(top_p) * block_sum;
+      float cumsum = 0;
+      float threshold = 0.0f;
+      float bias = 0.0f;
+      if (block_min < 0) {
+         bias = 1 - block_min; // Adjust the bias based on the minimum value
+         block_sum += bias * len; // Adjust the sum based on the minimum value
+      }
+      if (block_sum > 0 && isfinite(block_sum)) {
+         threshold = top_p * block_sum;
+      } else {
+         // 如果 block_sum 有问题，设置一个默认值
+         threshold = FLT_MAX / 2; // 使用一个较大但有限的值
+      }
       IdxT k = max_k; // Default to max_k
       for (IdxT i = 0; i < max_k; ++i) {
-         cumsum += s_values[i];
-         printf("i=%d, cumsum=%f, threshold=%f\n", i, (float)cumsum, (float)threshold);
+         cumsum += static_cast<float>(s_values[i]) + bias; // Adjust the sum based on the minimum value
          if (cumsum >= threshold) {
             k = i + 1;
             break;

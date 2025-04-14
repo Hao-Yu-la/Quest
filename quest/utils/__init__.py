@@ -405,7 +405,7 @@ def decode_sparse_attn(
                 for i in range(min(len(missed_kv_page_indices), num_free_blocks)):
                     page_idx = missed_kv_page_indices[i]
                     # Update the metadata cache
-                    page_store_idx = iController.kv_cache.allocate_page(layer_idx)
+                    page_store_idx = iController.kv_cache.allocate_page(layer_idx, is_the_last_page=False)
                     iController.metadata_cache.update_page_store_index(layer_idx, page_idx, page_store_idx)
                     # Load the page from the CPU cache
                     iController.async_move_to_gpu(layer_idx, page_idx)
