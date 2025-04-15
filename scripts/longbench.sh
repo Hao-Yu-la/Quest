@@ -2,7 +2,7 @@ cd ./evaluation/LongBench/LongBench
 
 model="Llama-3.1-8B-Instruct"
 
-for task in "triviaqa" "hotpotqa" #"qasper" "narrativeqa" "multifieldqa_en" "gov_report" 
+for task in "triviaqa" "hotpotqa" # "triviaqa" "hotpotqa" "qasper" "narrativeqa" "multifieldqa_en" "gov_report" 
 do
     # for budget in 512 1024 2048 4096 
     # do
@@ -11,7 +11,7 @@ do
     #         --method "quest" --token_budget $budget --page_size 16 --device "cuda:0" --max_seq_len 16896
     # done
 
-    for topp in 0.1 0.2 0.3 0.4 0.5
+    for topp in 0.05 0.01
     do
         python -u pred.py \
             --model $model --task $task \

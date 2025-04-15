@@ -133,10 +133,8 @@ static __global__ void compute_top_p_kernel(const T* in,
       float cumsum = 0;
       float threshold = 0.0f;
       float bias = 0.0f;
-      if (block_min < 0) {
-         bias = 1 - block_min; // Adjust the bias based on the minimum value
-         block_sum += bias * len; // Adjust the sum based on the minimum value
-      }
+      bias = 1 - block_min; // Adjust the bias based on the minimum value
+      block_sum += bias * len; // Adjust the sum based on the minimum value
       if (block_sum > 0 && isfinite(block_sum)) {
          threshold = top_p * block_sum;
       } else {
