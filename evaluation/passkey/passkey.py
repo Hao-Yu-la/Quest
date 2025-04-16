@@ -15,6 +15,12 @@ from evaluation.mistral import enable_tuple_kv_cache_for_mistral
 
 # from https://github.com/epfml/landmark-attention/blob/main/llama/run_test.py
 
+RUNTIME_CFGS = [
+    "quest",
+    "hg",
+]
+DTYPE = torch.float16
+
 
 def generate_prompt(n_garbage, depth_ratio):
     """Generates a text file and inserts an execute line at a random position."""
@@ -53,49 +59,56 @@ def generate_prompt(n_garbage, depth_ratio):
     )
 
 
-def test_model(pipe, prompt_text, pass_key):
+def test_model(model, tokenizer, prompt_text, pass_key, device):
     # response = pipe(prompt_text, num_return_sequences=1, max_new_tokens=10)[
     #     0]["generated_text"][len(prompt_text):]
 
-    length = len(prompt_text)
-    q_length = 400
-    que = prompt_text[-q_length:]
-    text = prompt_text[:-q_length]
-    input = pipe.tokenizer(text, return_tensors="pt").to("cuda")
-    q_input = pipe.tokenizer(que, return_tensors="pt").to("cuda")
-    q_input.input_ids = q_input.input_ids[:, 1:]
+    input = tokenizer(prompt_text, truncation=False, return_tensors="pt").to(device)
+    context_length = input.input_ids.shape[-1]
 
-    with torch.no_grad():
-        output = pipe.model(
-            input_ids=input.input_ids,
-            past_key_values=None,
-            use_cache=True,
-        )
-        past_key_values = output.past_key_values
-        for input_id in q_input.input_ids[0]:
-            output = pipe.model(
-                input_ids=input_id.unsqueeze(0).unsqueeze(0),
-                past_key_values=past_key_values,
-                use_cache=True,
-            )
-            past_key_values = output.past_key_values
+    if args.method == "quest":
+        model.quest_clear()
+    output = model.generate(
+        input.input_ids,
+        max_new_tokens=10,
+        num_beams=1,
+        do_sample=False,
+        temperature=0.0001,
+        num_logits_to_keep=1,
+    )[0]
+    response = tokenizer.decode(output[context_length:], skip_special_tokens=True)
 
-        pred_token_idx = output.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-        generated_content = [pred_token_idx.item()]
-        for _ in range(10 - 1):
-            outputs = pipe.model(
-                input_ids=pred_token_idx,
-                past_key_values=past_key_values,
-                use_cache=True,
-            )
+    # with torch.no_grad():
+    #     output = pipe.model(
+    #         input_ids=input.input_ids,
+    #         past_key_values=None,
+    #         use_cache=True,
+    #     )
+    #     past_key_values = output.past_key_values
+    #     for input_id in q_input.input_ids[0]:
+    #         output = pipe.model(
+    #             input_ids=input_id.unsqueeze(0).unsqueeze(0),
+    #             past_key_values=past_key_values,
+    #             use_cache=True,
+    #         )
+    #         past_key_values = output.past_key_values
 
-            past_key_values = outputs.past_key_values
-            pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-            generated_content += [pred_token_idx.item()]
-            if pred_token_idx.item() == pipe.tokenizer.eos_token_id:
-                break
+    #     pred_token_idx = output.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+    #     generated_content = [pred_token_idx.item()]
+    #     for _ in range(10 - 1):
+    #         outputs = pipe.model(
+    #             input_ids=pred_token_idx,
+    #             past_key_values=past_key_values,
+    #             use_cache=True,
+    #         )
 
-    response = pipe.tokenizer.decode(generated_content, skip_special_tokens=True)
+    #         past_key_values = outputs.past_key_values
+    #         pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
+    #         generated_content += [pred_token_idx.item()]
+    #         if pred_token_idx.item() == pipe.tokenizer.eos_token_id:
+    #             break
+
+    # response = pipe.tokenizer.decode(generated_content, skip_special_tokens=True)
 
     assert f"The pass key is {pass_key}" in prompt_text
 
@@ -116,18 +129,35 @@ def add_kv_cache_parameter(model, answer_first, answer_last):
             model._modules[name].answer_first = answer_first
             model._modules[name].answer_last = answer_last
 
+def load_model_and_tokenizer(path, model_name, device):
+    tokenizer = AutoTokenizer.from_pretrained(path)
+    if args.method == "quest":
+        from quest import LlamaForCausalLM
+        model = LlamaForCausalLM.from_pretrained(path, device_map=device, torch_dtype=DTYPE)
 
-def main(args):
+        # Init Quest Controller
+        model.quest_init(page_size=args.page_size, max_seq_len=args.max_seq_len, token_budget=args.token_budget, topp=args.topp, max_seq_len_cpu=args.max_seq_len_cpu, max_kvmetadata_len=args.max_kvmetadata_len)
+    else:
+        from transformers import LlamaForCausalLM
+        model = LlamaForCausalLM.from_pretrained(path, device_map=device, torch_dtype=DTYPE)
+    model = model.eval()
+    return model, tokenizer
+
+def main():
     # Avoid tokenization warnings (deadlock)
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
-    models = [x[0] for x in args.model]
-    tokenizer = AutoTokenizer.from_pretrained(
-        models[0],
-        model_max_length=sys.maxsize,
-        padding_side="right",
-        trust_remote_code=True,
-    )
+    # models = [x[0] for x in args.model]
+    # tokenizer = AutoTokenizer.from_pretrained(
+    #     models[0],
+    #     model_max_length=sys.maxsize,
+    #     padding_side="right",
+    #     trust_remote_code=True,
+    # )
+    device = torch.device(args.device)
+    model_name = args.model
+    model_path = args.model_path
+    model, tokenizer = load_model_and_tokenizer(model_path, model_name, device)
 
     if args.fixed_length:
         args.fixed_length = args.fixed_length * 4
@@ -162,58 +192,56 @@ def main(args):
             print(f"{target} tokens = {last_n} length")
 
     results = []
-    for model in models:
-        torch.cuda.empty_cache()
+    torch.cuda.empty_cache()
 
-        if 'llama' in model.lower() or 'longchat' in model.lower():
-            enable_tuple_kv_cache_for_llama()
-        if 'mistral' in model.lower():
-            enable_tuple_kv_cache_for_mistral()
+    # if 'llama' in model.lower() or 'longchat' in model.lower():
+    #     enable_tuple_kv_cache_for_llama()
+    # if 'mistral' in model.lower():
+    #     enable_tuple_kv_cache_for_mistral()
 
-        loaded = AutoModelForCausalLM.from_pretrained(
-            model,
-            device_map="auto",
-            torch_dtype=torch.float16,
-            trust_remote_code=True,
-            low_cpu_mem_usage=True,
-        )
+    # loaded = AutoModelForCausalLM.from_pretrained(
+    #     model,
+    #     device_map="auto",
+    #     torch_dtype=torch.float16,
+    #     trust_remote_code=True,
+    #     low_cpu_mem_usage=True,
+    # )
 
-        if args.quest:
-            print("Enable quest attention")
-            from evaluation.quest_attention import (
-                enable_quest_attention_eval,
+    # if args.quest:
+    #     print("Enable quest attention")
+    #     from evaluation.quest_attention import (
+    #         enable_quest_attention_eval,
+    #     )
+
+    #     enable_quest_attention_eval(loaded, args)
+
+    # pipe = pipeline(
+    #     "text-generation",
+    #     model=loaded,
+    #     tokenizer=tokenizer,
+    #     pad_token_id=tokenizer.eos_token_id,
+    # )
+
+    result = [0] * len(lengths)
+    for i, length in tenumerate(lengths, desc="Lengths", leave=False):
+        for _ in trange(0, args.iterations, desc="Iterations", leave=False):
+
+            depth_ratio = 100 // args.iterations * (_ + 1)
+            prompt_text, pass_key, answer_first, answer_last = generate_prompt(
+                length, depth_ratio
             )
 
-            enable_quest_attention_eval(loaded, args)
+            answer = test_model(model, tokenizer, prompt_text, pass_key, device)
+            if answer == pass_key:
+                result[i] += 1
 
-        pipe = pipeline(
-            "text-generation",
-            model=loaded,
-            tokenizer=tokenizer,
-            pad_token_id=tokenizer.eos_token_id,
-        )
+            print(f"depth_ratio: {depth_ratio}, correct: {answer == pass_key}")
+            print(f"pass_key: {pass_key}, answer: {answer}")
+        result[i] /= args.iterations
+        print(f"{model_name}: {tokens[i]}={int(result[i]*100)}%")
 
-        result = [0] * len(lengths)
-        for i, length in tenumerate(lengths, desc="Lengths", leave=False):
-            for _ in trange(0, args.iterations, desc="Iterations", leave=False):
-
-                depth_ratio = 100 // args.iterations * (_ + 1)
-                prompt_text, pass_key, answer_first, answer_last = generate_prompt(
-                    length, depth_ratio
-                )
-
-                num_tokens = len(pipe.tokenizer.encode(prompt_text))
-                answer = test_model(pipe, prompt_text, pass_key)
-                if answer == pass_key:
-                    result[i] += 1
-
-                print(f"depth_ratio: {depth_ratio}, correct: {answer == pass_key}")
-                print(f"pass_key: {pass_key}, answer: {answer}")
-            result[i] /= args.iterations
-            print(f"{model}: {tokens[i]}={int(result[i]*100)}%")
-
-        result.insert(0, model)
-        results.append(result)
+    result.insert(0, model_name)
+    results.append(result)
 
     if args.output_file:
         with open(args.output_file, "w", encoding="utf-8") as f:
@@ -252,6 +280,7 @@ if __name__ == "__main__":
     warnings.simplefilter("ignore")
     parser = argparse.ArgumentParser()
     parser.add_argument("-m", "--model", action="append", nargs="+")
+    parser.add_argument("--model_path", type=str)
     parser.add_argument("--fixed-length", type=int)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--min-tokens", type=int, default=256)
@@ -261,6 +290,21 @@ if __name__ == "__main__":
     parser.add_argument("--output-file", type=str)
 
     parser.add_argument("--quest", action="store_true", help="Enable quest attention")
+    parser.add_argument("--method", choices=RUNTIME_CFGS, default="quest")
     parser.add_argument("--token_budget", type=int, default=1024)
-    parser.add_argument("--chunk_size", type=int, default=16)
-    main(add_args(parser).parse_args())
+    parser.add_argument("--page_size", type=int, default=16)
+    parser.add_argument("--topp", type=float, default=None)
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--max_seq_len", type=str, default="1024", help="max sequence length for quest, can be a int or a list of int (for example: 512,1024,1024)")
+    parser.add_argument("--max_seq_len_cpu", type=int, default=0)
+    parser.add_argument("--max_kvmetadata_len", type=int, default=0)
+    add_args(parser)
+    args = parser.parse_args()
+    if "," in args.max_seq_len:
+        args.max_seq_len = [int(length) for length in args.max_seq_len.split(",")]
+    else:
+        args.max_seq_len = int(args.max_seq_len)
+        args.max_seq_len = [args.max_seq_len for _ in range(32)]
+        # args.max_seq_len[0] = 32768
+        # args.max_seq_len[1] = 32768
+    main()

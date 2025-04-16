@@ -383,7 +383,7 @@ def decode_sparse_attn(
     # set the select page number to the max(iController.topp_num), which is the max number of pages we select.
     iController.kv_indptr_for_approx_decode = torch.tensor([0, iController.inference_page_budget - 1], dtype=torch.int32, device=iController.device)
     if use_estimate and iController.topp is not None:
-        selected_page_num = max(iController.topp_num.max(), 15)
+        selected_page_num = max(iController.topp_num.max(), 11)
         iController.kv_indptr_for_approx_decode = torch.tensor([0, selected_page_num], dtype=torch.int32, device=iController.device)
 
     # The topk_indices is the indices of the selected pages in the kv cache metadata.
