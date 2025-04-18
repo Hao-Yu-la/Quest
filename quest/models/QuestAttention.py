@@ -184,12 +184,6 @@ class QuestAttention(nn.Module):
                         iController,
                     )
                     torch.cuda.nvtx.range_pop()
-                    # with open("/home/zhanghaoyu/project/quest/tmp/topp_num_" + str(iController.topp) + ".jsonl", "a") as f:
-                    #     record = {
-                    #     "layer_idx": self.layer_idx
-                    #     "topp_num": iController.topp_num.tolist(), 
-                    #     }
-                    #     f.write(json.dumps(record) + "\n")
                 else: # Topk sampling
                     torch.cuda.nvtx.range_push("topk")
                     quest.utils.decode_topk(

@@ -8,6 +8,7 @@ from quest.utils.kv_cache import KvCache
 from quest.utils.controller import InferenceController
 from quest.utils.decode_wrapper import BatchDecodeWithPagedKVCacheWrapper
 import json
+import os
 
 __all__ = [
     'TensorLayout',
@@ -383,7 +384,14 @@ def decode_sparse_attn(
     # set the select page number to the max(iController.topp_num), which is the max number of pages we select.
     iController.kv_indptr_for_approx_decode = torch.tensor([0, iController.inference_page_budget - 1], dtype=torch.int32, device=iController.device)
     if use_estimate and iController.topp is not None:
-        selected_page_num = max(iController.topp_num.max(), 11)
+        selected_page_num = max(iController.topp_num.max(), 1)
+        if os.environ.get("SAVE_KV_NUM") == "1":
+            with open("./tmp/topp_num_" + str(iController.topp) + ".jsonl", "a") as f:
+                record = {
+                "layer_idx": layer_idx,
+                "topp_num": selected_page_num.item(),
+                }
+                f.write(json.dumps(record) + "\n")
         iController.kv_indptr_for_approx_decode = torch.tensor([0, selected_page_num], dtype=torch.int32, device=iController.device)
 
     # The topk_indices is the indices of the selected pages in the kv cache metadata.
@@ -414,21 +422,12 @@ def decode_sparse_attn(
         for i in range(topk_indices.size(0)): # for each head
             kv_page_store_idx = iController.metadata_cache._store_indexes[layer_idx][topk_indices[i]]
             # assert all(kv_page_store_idx[:min_page_num] >= 0), f"kv_page_store_idx: {kv_page_store_idx[:min_page_num]}"
-            ## save the selected page index info in file
-            # if -1 in kv_page_store_idx:
-            #     with open("/home/zhanghaoyu/project/quest/tmp/selected_kv_block.jsonl", "a") as f:
-            #         record = {
-            #             "layer": layer_idx,
-            #             "head": i,
-            #             "kv_page_selected": topk_indices[i].tolist(),
-            #             "kv_page_store_idx": kv_page_store_idx.tolist(),
-            #         }
-            #         f.write(json.dumps(record) + "\n")
             # remove pages that are not in the kv cache
             kv_page_store_idx = kv_page_store_idx[kv_page_store_idx >= 0]
             min_page_num = min(min_page_num, kv_page_store_idx.size(0))
             topk_indices[i][:kv_page_store_idx.size(0)] = kv_page_store_idx
             topk_indices[i][kv_page_store_idx.size(0):] = -1
+        # topk_indices = topk_indices[:, :min(min_page_num + 10, topk_indices.size(1))].contiguous()
         topk_indices = topk_indices[:, :min_page_num].contiguous()
         iController.kv_indptr_for_approx_decode = torch.tensor([0, min_page_num], dtype=torch.int32, device=iController.device)
 

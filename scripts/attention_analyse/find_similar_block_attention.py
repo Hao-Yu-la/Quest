@@ -25,7 +25,7 @@ if method == "quest":
   model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE, output_attentions=True)
 
   # Init Quest Controller
-  model.quest_init(page_size=16, max_seq_len=8192, token_budget=token_budget, topp=topp)
+  model.quest_init(page_size=16, max_seq_len=16384, token_budget=token_budget, topp=topp)
 else:
   from transformers import LlamaForCausalLM
   model = LlamaForCausalLM.from_pretrained(MODEL_PATH, device_map=DEVICE, torch_dtype=DTYPE, output_attentions=True)
@@ -46,7 +46,7 @@ for prompt_i in range(len(prompt)):
 
   outputs = model.generate(
     **inputs,
-    max_length=2048,
+    max_length=16384,
     output_attentions=True,
     return_dict_in_generate=True
   )
